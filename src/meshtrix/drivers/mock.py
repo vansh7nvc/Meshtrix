@@ -187,10 +187,32 @@ class MockMechanicalDriver(MechanicalDriver):
             self._element_order = str(element_order).lower()
         if local_refinements is not None:
             for ref in local_refinements:
-                if hasattr(ref, "name"):
-                    self.add_local_refinement(ref.name, ref.selection, ref.element_size)
-                elif isinstance(ref, dict):
-                    self.add_local_refinement(ref["name"], ref["selection"], ref["element_size"])
+                if isinstance(ref, dict):
+                    r_name = str(ref.get("name", "refinement"))
+                    r_sel = str(ref.get("selection", ""))
+                    r_size_raw = ref.get("element_size", 0.0)
+                    r_size = (
+                        float(r_size_raw)
+                        if isinstance(r_size_raw, (int, float))
+                        and not isinstance(r_size_raw, bool)
+                        and not math.isnan(r_size_raw)
+                        and not math.isinf(r_size_raw)
+                        else 0.0
+                    )
+                    self.add_local_refinement(r_name, r_sel, r_size)
+                elif hasattr(ref, "name"):
+                    r_name = str(getattr(ref, "name", "refinement"))
+                    r_sel = str(getattr(ref, "selection", ""))
+                    r_size_raw = getattr(ref, "element_size", 0.0)
+                    r_size = (
+                        float(r_size_raw)
+                        if isinstance(r_size_raw, (int, float))
+                        and not isinstance(r_size_raw, bool)
+                        and not math.isnan(r_size_raw)
+                        and not math.isinf(r_size_raw)
+                        else 0.0
+                    )
+                    self.add_local_refinement(r_name, r_sel, r_size)
 
         if self._inject_mesh_generation_failure_flag:
             self._mesh_generated = False
@@ -206,7 +228,19 @@ class MockMechanicalDriver(MechanicalDriver):
             return self._mesh_stats
 
         body_count = max(1, len(self._bodies))
-        size = max(0.001, self._global_mesh_size or 5.0)
+        raw_size = self._global_mesh_size
+        if (
+            raw_size is not None
+            and isinstance(raw_size, (int, float))
+            and not isinstance(raw_size, bool)
+            and not math.isnan(raw_size)
+            and not math.isinf(raw_size)
+            and raw_size > 0.0
+        ):
+            size = max(0.001, float(raw_size))
+        else:
+            size = 5.0
+
         base_elem_count = int(max(100, 1000 * body_count / size))
         refinement_elem_count = len(self._local_refinements) * 250
         if (
@@ -228,7 +262,15 @@ class MockMechanicalDriver(MechanicalDriver):
         skew = self._injected_max_skewness if self._injected_max_skewness is not None else 0.28
         aspect = self._injected_max_aspect_ratio if self._injected_max_aspect_ratio is not None else 1.85
         warpage = self._injected_max_warpage if self._injected_max_warpage is not None else 3.5
-        min_qual = max(0.0, 1.0 - skew)
+        if (
+            isinstance(skew, (int, float))
+            and not isinstance(skew, bool)
+            and not math.isnan(skew)
+            and not math.isinf(skew)
+        ):
+            min_qual = max(0.0, 1.0 - float(skew))
+        else:
+            min_qual = 0.0
 
         self._mesh_stats = MeshStatistics(
             node_count=total_nodes,

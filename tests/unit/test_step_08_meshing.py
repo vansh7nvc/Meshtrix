@@ -1240,5 +1240,85 @@ class TestStep08AdversarialEdgeCases:
         assert stats.node_count == 0
         assert isinstance(stats.node_count, int)
 
+    def test_execute_none_local_refinements_does_not_crash(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Execute runs cleanly when spec.mesh.local_refinements is None."""
+        step6 = Step06MaterialMapping()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.local_refinements = None
+
+        step8 = Step08Meshing()
+        step8.execute(context)
+        assert mock_driver.is_mesh_generated() is True
+
+    def test_execute_dict_refinement_with_none_element_size_does_not_crash(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Execute handles refinement dictionaries with None element_size safely without TypeError."""
+        step6 = Step06MaterialMapping()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.local_refinements = [
+            {"name": "Holes", "selection": "NS_HOLES", "element_size": None}
+        ]
+
+        step8 = Step08Meshing()
+        step8.execute(context)
+        assert mock_driver.is_mesh_generated() is True
+
+    def test_mock_driver_generate_mesh_corrupt_global_size(self) -> None:
+        """MockMechanicalDriver.generate_mesh safely falls back to nominal 5.0 on non-numeric global_size."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        stats = driver.generate_mesh(global_size="corrupt_size")  # type: ignore[arg-type]
+        assert stats.element_count > 0
+
+    def test_mock_driver_generate_mesh_corrupt_injected_skewness(self) -> None:
+        """MockMechanicalDriver.generate_mesh safely computes min_qual when injected skewness is non-numeric."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.inject_mesh_skewness("corrupt_skew")  # type: ignore[arg-type]
+        stats = driver.generate_mesh()
+        assert stats.min_quality == 0.0
+
+    def test_mock_driver_generate_mesh_partial_refinement_dict(self) -> None:
+        """MockMechanicalDriver.generate_mesh safely handles refinement dicts with missing keys."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        stats = driver.generate_mesh(local_refinements=[{"selection": "NS_EDGE"}])
+        assert stats.element_count > 0
+
+    def test_troubleshoot_returns_structured_failure_objects_with_failing_elements(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Troubleshoot returns structured FailureObjects containing failing element sets and local refinement advice."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mock_driver.inject_mesh_skewness(0.92, [1042, 1043])
+        post_res = step8.post_check(context)
+        assert not post_res.passed
+
+        failures = step8.troubleshoot(context, post_res)
+        assert len(failures) == 1
+        f = failures[0]
+        assert f.error_code == ERR_MESH_SKEWNESS_EXCEEDED
+        assert "1042" in f.component_or_entity
+        assert "1043" in f.component_or_entity
+        assert any("local mesh refinement" in fix.lower() for fix in f.suggested_fixes)
+
+
 
 

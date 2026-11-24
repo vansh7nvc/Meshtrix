@@ -237,10 +237,10 @@ class Step08Meshing(BaseStep):
                 if hasattr(context.driver, "get_named_selections")
                 else set()
             )
-            for ref in context.spec.mesh.local_refinements:
+            for ref in (context.spec.mesh.local_refinements or []):
                 ref_name = getattr(ref, "name", None) or (ref.get("name") if isinstance(ref, dict) else str(ref))
                 ref_selection = getattr(ref, "selection", None) or (ref.get("selection") if isinstance(ref, dict) else "")
-                ref_size = getattr(ref, "element_size", None) or (ref.get("element_size") if isinstance(ref, dict) else None)
+                ref_size = getattr(ref, "element_size", None) if hasattr(ref, "element_size") else (ref.get("element_size") if isinstance(ref, dict) else None)
 
                 if ref_selection not in existing_selections:
                     expected_str = (
@@ -322,14 +322,16 @@ class Step08Meshing(BaseStep):
         context.driver.set_element_order(str(mesh_spec.element_order))
 
         # 3. Apply local mesh refinements
-        for ref in mesh_spec.local_refinements:
+        for ref in (mesh_spec.local_refinements or []):
             ref_name = getattr(ref, "name", None) or (ref.get("name") if isinstance(ref, dict) else str(ref))
             ref_selection = getattr(ref, "selection", None) or (ref.get("selection") if isinstance(ref, dict) else "")
-            ref_size = getattr(ref, "element_size", None) or (ref.get("element_size") if isinstance(ref, dict) else 0.0)
+            raw_size = getattr(ref, "element_size", None) if hasattr(ref, "element_size") else (ref.get("element_size") if isinstance(ref, dict) else None)
+            res_size = _resolve_numeric_threshold(raw_size, min_val=1e-6)
+            ref_size = res_size if res_size is not None else 0.0
             context.driver.add_local_refinement(
                 name=ref_name,
                 selection=ref_selection,
-                element_size=float(ref_size),
+                element_size=ref_size,
             )
 
         # 4. Trigger mesh generation via driver
