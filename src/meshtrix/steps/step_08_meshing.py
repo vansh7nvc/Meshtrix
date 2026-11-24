@@ -153,7 +153,12 @@ class Step08Meshing(BaseStep):
 
             if str(body.body_type).strip().lower() in ("surface", "shell"):
                 assigned_thk = context.driver.get_shell_thickness(body.name)
-                if assigned_thk is None or not (assigned_thk > 0.0) or math.isnan(assigned_thk):
+                if (
+                    assigned_thk is None
+                    or not (assigned_thk > 0.0)
+                    or math.isnan(assigned_thk)
+                    or math.isinf(assigned_thk)
+                ):
                     result.add_failure(
                         FailureObject(
                             error_code=ERR_MAT_INVALID_THICKNESS,
@@ -163,12 +168,12 @@ class Step08Meshing(BaseStep):
                             measured_value=assigned_thk,
                             expected_value="> 0.0 mm",
                             engineering_message=(
-                                f"Surface body '{body.name}' requires positive shell thickness before meshing, "
+                                f"Surface body '{body.name}' requires positive finite shell thickness before meshing, "
                                 f"but found {assigned_thk}."
                             ),
                             likely_causes=[
                                 "Step 6 failed to assign shell thickness to surface body",
-                                "Zero or negative thickness assigned in JobSpec",
+                                "Zero, negative, or infinite thickness assigned in JobSpec",
                             ],
                             suggested_fixes=[
                                 f"Assign positive shell thickness to surface body '{body.name}' in JobSpec",
@@ -324,7 +329,14 @@ class Step08Meshing(BaseStep):
         min_elements = quality_limits.min_elements if quality_limits and quality_limits.min_elements is not None else 1
         max_elements = quality_limits.max_elements if quality_limits else None
 
-        if elem_count is None or elem_count < min_elements:
+        is_elem_count_valid = (
+            elem_count is not None
+            and isinstance(elem_count, (int, float))
+            and not math.isnan(elem_count)
+            and not math.isinf(elem_count)
+        )
+
+        if not is_elem_count_valid or elem_count < min_elements:
             result.add_failure(
                 FailureObject(
                     error_code=ERR_MESH_ELEMENT_COUNT,
@@ -335,8 +347,8 @@ class Step08Meshing(BaseStep):
                     expected_value=f">= {min_elements}",
                     engineering_message=(
                         f"Mesh element count {elem_count} is below required minimum of {min_elements}."
-                        if elem_count is not None
-                        else f"Mesh element count is None (mesh not generated or invalid), expected >= {min_elements}."
+                        if is_elem_count_valid
+                        else f"Mesh element count is invalid ({elem_count}), expected >= {min_elements}."
                     ),
                     likely_causes=[
                         "Mesh generation failed silently or produced incomplete mesh",
@@ -376,24 +388,44 @@ class Step08Meshing(BaseStep):
         # 4. Resolve quality metric thresholds
         # Skewness threshold resolution:
         # Priority: quality_limits.max_skewness -> mesh.max_skewness -> tolerances.mesh_skewness_limit ->
-        #           (1.0 - min_quality) if skewness metric -> default 0.85
+        #           quality_limits.min_quality (if explicitly defined for skewness) ->
+        #           mesh.min_quality (if skewness metric) ->
+        #           quality_limits.min_quality (default for skewness) ->
+        #           default 0.85
+        ql_explicit_min_qual = (
+            quality_limits is not None
+            and quality_limits.min_quality is not None
+            and (not hasattr(quality_limits, "model_fields_set") or "min_quality" in quality_limits.model_fields_set)
+            and (
+                str(quality_limits.metric).strip().lower() == "skewness"
+                or (quality_limits.metric is None and mesh_spec and str(mesh_spec.quality_metric).strip().lower() == "skewness")
+            )
+        )
+        mesh_has_min_qual = (
+            mesh_spec is not None
+            and mesh_spec.min_quality is not None
+            and str(mesh_spec.quality_metric).strip().lower() == "skewness"
+        )
+
         if quality_limits and quality_limits.max_skewness is not None:
             skew_thresh = quality_limits.max_skewness
         elif mesh_spec and mesh_spec.max_skewness is not None:
             skew_thresh = mesh_spec.max_skewness
         elif context.spec.tolerances and context.spec.tolerances.mesh_skewness_limit is not None:
             skew_thresh = context.spec.tolerances.mesh_skewness_limit
-        elif quality_limits and quality_limits.min_quality is not None and (
-            str(quality_limits.metric).strip().lower() == "skewness"
-            or (quality_limits.metric is None and mesh_spec and str(mesh_spec.quality_metric).strip().lower() == "skewness")
+        elif ql_explicit_min_qual and quality_limits is not None:
+            skew_thresh = 1.0 - quality_limits.min_quality
+        elif mesh_has_min_qual and mesh_spec is not None:
+            skew_thresh = 1.0 - mesh_spec.min_quality
+        elif (
+            quality_limits
+            and quality_limits.min_quality is not None
+            and (
+                str(quality_limits.metric).strip().lower() == "skewness"
+                or (quality_limits.metric is None and mesh_spec and str(mesh_spec.quality_metric).strip().lower() == "skewness")
+            )
         ):
             skew_thresh = 1.0 - quality_limits.min_quality
-        elif (
-            mesh_spec
-            and mesh_spec.min_quality is not None
-            and str(mesh_spec.quality_metric).strip().lower() == "skewness"
-        ):
-            skew_thresh = 1.0 - mesh_spec.min_quality
         else:
             skew_thresh = 0.85
 
@@ -421,18 +453,24 @@ class Step08Meshing(BaseStep):
 
         # 5. Inspect skewness
         max_skew = context.driver.get_max_skewness()
-        if max_skew is None or math.isnan(max_skew) or max_skew > skew_thresh:
+        is_skew_valid = (
+            max_skew is not None
+            and not math.isnan(max_skew)
+            and not math.isinf(max_skew)
+            and max_skew >= 0.0
+        )
+        if not is_skew_valid or max_skew > skew_thresh:
             failing_elements = (
                 context.driver.get_failing_elements("skewness", skew_thresh)
                 if hasattr(context.driver, "get_failing_elements")
                 else []
             )
             elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
-            measured_repr = f"{max_skew:.4f}" if max_skew is not None and not math.isnan(max_skew) else str(max_skew)
+            measured_repr = f"{max_skew:.4f}" if is_skew_valid else str(max_skew)
             msg = (
                 f"Maximum element skewness {measured_repr} exceeds allowable threshold "
                 f"{skew_thresh:.4f} on {elem_desc}."
-                if max_skew is not None and not math.isnan(max_skew)
+                if is_skew_valid
                 else f"Maximum element skewness is invalid ({measured_repr}) on {elem_desc}, expected <= {skew_thresh:.4f}."
             )
             result.add_failure(
@@ -460,18 +498,24 @@ class Step08Meshing(BaseStep):
 
         # 6. Inspect aspect ratio
         max_aspect = context.driver.get_max_aspect_ratio()
-        if max_aspect is None or math.isnan(max_aspect) or max_aspect > aspect_thresh:
+        is_aspect_valid = (
+            max_aspect is not None
+            and not math.isnan(max_aspect)
+            and not math.isinf(max_aspect)
+            and max_aspect >= 1.0
+        )
+        if not is_aspect_valid or max_aspect > aspect_thresh:
             failing_elements = (
                 context.driver.get_failing_elements("aspect_ratio", aspect_thresh)
                 if hasattr(context.driver, "get_failing_elements")
                 else []
             )
             elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
-            measured_repr = f"{max_aspect:.2f}" if max_aspect is not None and not math.isnan(max_aspect) else str(max_aspect)
+            measured_repr = f"{max_aspect:.2f}" if is_aspect_valid else str(max_aspect)
             msg = (
                 f"Maximum element aspect ratio {measured_repr} exceeds allowable threshold "
                 f"{aspect_thresh:.2f} on {elem_desc}."
-                if max_aspect is not None and not math.isnan(max_aspect)
+                if is_aspect_valid
                 else f"Maximum element aspect ratio is invalid ({measured_repr}) on {elem_desc}, expected <= {aspect_thresh:.2f}."
             )
             result.add_failure(
@@ -499,18 +543,24 @@ class Step08Meshing(BaseStep):
 
         # 7. Inspect warpage
         max_warp = context.driver.get_max_warpage()
-        if max_warp is None or math.isnan(max_warp) or max_warp > warp_thresh:
+        is_warp_valid = (
+            max_warp is not None
+            and not math.isnan(max_warp)
+            and not math.isinf(max_warp)
+            and max_warp >= 0.0
+        )
+        if not is_warp_valid or max_warp > warp_thresh:
             failing_elements = (
                 context.driver.get_failing_elements("warpage", warp_thresh)
                 if hasattr(context.driver, "get_failing_elements")
                 else []
             )
             elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
-            measured_repr = f"{max_warp:.1f}" if max_warp is not None and not math.isnan(max_warp) else str(max_warp)
+            measured_repr = f"{max_warp:.1f}" if is_warp_valid else str(max_warp)
             msg = (
                 f"Maximum element warpage {measured_repr} deg exceeds allowable threshold "
                 f"{warp_thresh:.1f} deg on {elem_desc}."
-                if max_warp is not None and not math.isnan(max_warp)
+                if is_warp_valid
                 else f"Maximum element warpage is invalid ({measured_repr}) on {elem_desc}, expected <= {warp_thresh:.1f} deg."
             )
             result.add_failure(

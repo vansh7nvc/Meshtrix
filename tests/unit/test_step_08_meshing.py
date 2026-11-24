@@ -875,4 +875,114 @@ class TestStep08AdversarialEdgeCases:
         failing = driver.get_failing_elements("aspect_ratio", 10.0)
         assert len(failing) > 0
 
+    def test_post_check_nan_and_inf_element_count_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check detects IEEE 754 NaN and Infinite element count as failure."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # Test NaN element count
+        mock_driver.inject_mesh_element_count(float("nan"))
+        res_nan = step8.post_check(context)
+        assert_check_failed(res_nan, expected_code=ERR_MESH_ELEMENT_COUNT)
+
+        # Test +inf element count
+        mock_driver.inject_mesh_element_count(float("inf"))
+        res_inf = step8.post_check(context)
+        assert_check_failed(res_inf, expected_code=ERR_MESH_ELEMENT_COUNT)
+
+    def test_pre_check_inf_thickness_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check flags ERR_MAT_INVALID_THICKNESS on infinite shell thickness."""
+        mock_driver.add_body("Fuselage_Skin", body_type="surface", thickness=float("inf"))
+        mock_driver.assign_material("Fuselage_Skin", "Structural_Steel")
+
+        for body in mock_driver.get_bodies():
+            mock_driver.assign_material(body.name, "Structural_Steel")
+            if body.body_type in ("surface", "shell") and body.name != "Fuselage_Skin":
+                mock_driver.set_shell_thickness(body.name, 2.0)
+
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MAT_INVALID_THICKNESS)
+        assert any(f.component_or_entity == "Fuselage_Skin" for f in res.failures)
+
+    def test_post_check_negative_and_inf_quality_metrics_fail(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check flags negative, +inf, and -inf quality metrics as failures."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # Negative skewness is non-physical
+        mock_driver.inject_mesh_skewness(-0.5)
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+        # Negative aspect ratio is non-physical (< 1.0)
+        mock_driver.clear_faults()
+        mock_driver.inject_mesh_aspect_ratio(0.5)
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_ASPECT_RATIO_EXCEEDED)
+
+        # Negative warpage is non-physical (< 0.0)
+        mock_driver.clear_faults()
+        mock_driver.inject_mesh_warpage(-5.0)
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_WARPAGE_EXCEEDED)
+
+        # -inf metrics
+        mock_driver.clear_faults()
+        mock_driver.inject_mesh_skewness(-float("inf"))
+        mock_driver.inject_mesh_aspect_ratio(-float("inf"))
+        mock_driver.inject_mesh_warpage(-float("inf"))
+        res = step8.post_check(context)
+        assert_check_failed(res)
+        error_codes = [f.error_code for f in res.failures]
+        assert ERR_MESH_SKEWNESS_EXCEEDED in error_codes
+        assert ERR_MESH_ASPECT_RATIO_EXCEEDED in error_codes
+        assert ERR_MESH_WARPAGE_EXCEEDED in error_codes
+
+    def test_post_check_quality_limits_default_does_not_override_user_mesh_min_quality(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """quality_limits default min_quality=0.2 does not override explicit mesh.min_quality=0.35."""
+        spec_dict = valid_job_spec.to_dict()
+        spec_dict["mesh"]["min_quality"] = 0.35  # Skewness threshold: 1.0 - 0.35 = 0.65
+        spec_dict["mesh"]["quality_limits"] = {
+            "max_aspect_ratio": 8.0,  # User did not set min_quality here
+        }
+        spec = JobSpec.model_validate(spec_dict)
+
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # Skewness 0.70 exceeds 0.65 -> MUST FAIL
+        mock_driver.inject_mesh_skewness(0.70)
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+    def test_get_failing_elements_unknown_metric_with_registered_elements(self) -> None:
+        """Custom/unrecognized metric retrieves registered failing elements without being suppressed by threshold."""
+        driver = MockMechanicalDriver()
+        driver._failing_elements["jacobian"] = [5001, 5002]
+        res = driver.get_failing_elements("jacobian", 0.5)
+        assert res == [5001, 5002]
+
+
 
