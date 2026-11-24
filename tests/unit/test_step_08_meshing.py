@@ -1319,6 +1319,74 @@ class TestStep08AdversarialEdgeCases:
         assert "1043" in f.component_or_entity
         assert any("local mesh refinement" in fix.lower() for fix in f.suggested_fixes)
 
+    def test_pre_check_refinement_dict_without_name_does_not_crash_validation(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check handles refinement dicts lacking a 'name' key without Pydantic ValidationError."""
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.local_refinements = [{"selection": "NON_EXISTENT_NS", "element_size": 1.0}]
+
+        res = step8.pre_check(context)
+        assert not res.passed
+        assert any(f.error_code == ERR_MESH_MISSING_SELECTION for f in res.failures)
+        assert all(isinstance(f.component_or_entity, str) and f.component_or_entity for f in res.failures)
+
+    def test_pre_check_unnamed_body_dict_does_not_crash_validation(
+        self, valid_job_spec: JobSpec
+    ) -> None:
+        """Pre-check handles driver bodies without a 'name' key without Pydantic ValidationError."""
+        step8 = Step08Meshing()
+        driver = MockMechanicalDriver()
+        driver.connect()
+        driver_any: Any = driver
+        driver_any.get_bodies = lambda: [{"body_type": "solid"}]
+        context = RunContext(spec=valid_job_spec, driver=driver)
+
+        res = step8.pre_check(context)
+        assert not res.passed
+        assert any(f.error_code == ERR_MAT_UNASSIGNED_BODY for f in res.failures)
+        assert all(isinstance(f.component_or_entity, str) and f.component_or_entity for f in res.failures)
+
+    def test_execute_unnamed_refinement_dict_does_not_duplicate_refinements(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Execute and generate_mesh synchronize fallback names for unnamed refinements, avoiding duplicates."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.local_refinements = [{"selection": "NS_EDGE", "element_size": 2.0}]
+
+        step8.execute(context)
+        refinements = mock_driver.get_local_refinements()
+        assert len(refinements) == 1
+        assert refinements[0]["name"] == "refinement_NS_EDGE"
+        assert refinements[0]["selection"] == "NS_EDGE"
+
+    def test_mock_driver_get_failing_elements_unhashable_metric(self) -> None:
+        """MockMechanicalDriver.get_failing_elements handles unhashable sequence metric types safely."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.generate_mesh()
+        res = driver.get_failing_elements(["skewness"], 0.85)  # type: ignore[arg-type]
+        assert isinstance(res, list)
+
+    def test_mock_driver_add_local_refinement_none_name_normalized(self) -> None:
+        """MockMechanicalDriver.add_local_refinement normalizes None name and updates idempotently."""
+        driver = MockMechanicalDriver()
+        driver.add_local_refinement(None, "NS1", 1.5)  # type: ignore[arg-type]
+        driver.add_local_refinement(None, "NS1", 2.0)  # type: ignore[arg-type]
+        refinements = driver.get_local_refinements()
+        assert len(refinements) == 1
+        assert refinements[0]["name"] == "refinement"
+        assert refinements[0]["element_size"] == pytest.approx(2.0)
+
+
 
 
 

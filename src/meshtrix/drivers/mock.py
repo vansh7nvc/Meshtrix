@@ -161,13 +161,14 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def add_local_refinement(self, name: str, selection: str, element_size: float) -> None:
         """Define a local mesh refinement on a named selection."""
+        norm_name = str(name).strip() if name is not None and str(name).strip() else "refinement"
         for ref in self._local_refinements:
-            if ref["name"] == name:
+            if ref["name"] == norm_name:
                 ref["selection"] = selection
                 ref["element_size"] = element_size
                 return
         self._local_refinements.append(
-            {"name": name, "selection": selection, "element_size": element_size}
+            {"name": norm_name, "selection": selection, "element_size": element_size}
         )
 
     def get_local_refinements(self) -> list[dict[str, Any]]:
@@ -188,8 +189,18 @@ class MockMechanicalDriver(MechanicalDriver):
         if local_refinements is not None:
             for ref in local_refinements:
                 if isinstance(ref, dict):
-                    r_name = str(ref.get("name", "refinement"))
-                    r_sel = str(ref.get("selection", ""))
+                    raw_n = ref.get("name")
+                    raw_s = ref.get("selection")
+                    r_name = (
+                        str(raw_n).strip()
+                        if raw_n is not None and str(raw_n).strip()
+                        else (
+                            f"refinement_{str(raw_s).strip()}"
+                            if raw_s is not None and str(raw_s).strip()
+                            else "refinement"
+                        )
+                    )
+                    r_sel = str(raw_s).strip() if raw_s is not None else ""
                     r_size_raw = ref.get("element_size", 0.0)
                     r_size = (
                         float(r_size_raw)
@@ -200,9 +211,19 @@ class MockMechanicalDriver(MechanicalDriver):
                         else 0.0
                     )
                     self.add_local_refinement(r_name, r_sel, r_size)
-                elif hasattr(ref, "name"):
-                    r_name = str(getattr(ref, "name", "refinement"))
-                    r_sel = str(getattr(ref, "selection", ""))
+                elif hasattr(ref, "name") or hasattr(ref, "selection"):
+                    raw_n = getattr(ref, "name", None)
+                    raw_s = getattr(ref, "selection", None)
+                    r_name = (
+                        str(raw_n).strip()
+                        if raw_n is not None and str(raw_n).strip()
+                        else (
+                            f"refinement_{str(raw_s).strip()}"
+                            if raw_s is not None and str(raw_s).strip()
+                            else "refinement"
+                        )
+                    )
+                    r_sel = str(raw_s).strip() if raw_s is not None else ""
                     r_size_raw = getattr(ref, "element_size", 0.0)
                     r_size = (
                         float(r_size_raw)
@@ -350,7 +371,9 @@ class MockMechanicalDriver(MechanicalDriver):
         ):
             return []
 
-        elements = self._failing_elements.get(norm_metric, self._failing_elements.get(metric))
+        elements = self._failing_elements.get(norm_metric)
+        if elements is None and isinstance(metric, str):
+            elements = self._failing_elements.get(metric)
         if elements is not None:
             return list(elements)
 

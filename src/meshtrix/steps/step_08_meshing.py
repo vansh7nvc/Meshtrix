@@ -44,6 +44,41 @@ def _resolve_numeric_threshold(
     return None
 
 
+def _resolve_body_name(body: Any) -> str:
+    """Safely extract body name as non-empty string."""
+    raw_name = body.get("name") if isinstance(body, dict) else getattr(body, "name", None)
+    if raw_name is not None and str(raw_name).strip():
+        return str(raw_name).strip()
+    return str(body) if body is not None else "UnknownBody"
+
+
+def _resolve_body_type(body: Any) -> str:
+    """Safely extract body type (solid/surface/shell)."""
+    raw_type = body.get("body_type") if isinstance(body, dict) else getattr(body, "body_type", None)
+    if raw_type is not None and str(raw_type).strip():
+        return str(raw_type).strip().lower()
+    return "solid"
+
+
+def _resolve_refinement_name(ref: Any) -> str:
+    """Safely extract local refinement name as non-empty string."""
+    raw_name = ref.get("name") if isinstance(ref, dict) else getattr(ref, "name", None)
+    if raw_name is not None and str(raw_name).strip():
+        return str(raw_name).strip()
+    raw_sel = ref.get("selection") if isinstance(ref, dict) else getattr(ref, "selection", None)
+    if raw_sel is not None and str(raw_sel).strip():
+        return f"refinement_{str(raw_sel).strip()}"
+    return str(ref) if ref is not None else "refinement"
+
+
+def _resolve_selection_name(ref: Any) -> str:
+    """Safely extract named selection identifier."""
+    raw_sel = ref.get("selection") if isinstance(ref, dict) else getattr(ref, "selection", None)
+    if raw_sel is not None:
+        return str(raw_sel).strip()
+    return ""
+
+
 class Step08Meshing(BaseStep):
     """Step 8: Global and local mesh generation, quality inspection, and diagnostic troubleshooting."""
 
@@ -167,8 +202,8 @@ class Step08Meshing(BaseStep):
 
         # 4 & 5. Verify material and thickness assignments on every body
         for body in model_bodies:
-            b_name = getattr(body, "name", None) or (body.get("name") if isinstance(body, dict) else str(body))
-            b_type = getattr(body, "body_type", None) or (body.get("body_type") if isinstance(body, dict) else "solid")
+            b_name = _resolve_body_name(body)
+            b_type = _resolve_body_type(body)
             assigned_mat = context.driver.get_assigned_material(b_name)
             if not assigned_mat or isinstance(assigned_mat, bool) or not str(assigned_mat).strip():
                 result.add_failure(
@@ -195,7 +230,7 @@ class Step08Meshing(BaseStep):
                     )
                 )
 
-            if str(b_type).strip().lower() in ("surface", "shell"):
+            if b_type in ("surface", "shell"):
                 assigned_thk = context.driver.get_shell_thickness(b_name)
                 is_thk_valid = (
                     assigned_thk is not None
@@ -238,8 +273,8 @@ class Step08Meshing(BaseStep):
                 else set()
             )
             for ref in (context.spec.mesh.local_refinements or []):
-                ref_name = getattr(ref, "name", None) or (ref.get("name") if isinstance(ref, dict) else str(ref))
-                ref_selection = getattr(ref, "selection", None) or (ref.get("selection") if isinstance(ref, dict) else "")
+                ref_name = _resolve_refinement_name(ref)
+                ref_selection = _resolve_selection_name(ref)
                 ref_size = getattr(ref, "element_size", None) if hasattr(ref, "element_size") else (ref.get("element_size") if isinstance(ref, dict) else None)
 
                 if ref_selection not in existing_selections:
@@ -323,8 +358,8 @@ class Step08Meshing(BaseStep):
 
         # 3. Apply local mesh refinements
         for ref in (mesh_spec.local_refinements or []):
-            ref_name = getattr(ref, "name", None) or (ref.get("name") if isinstance(ref, dict) else str(ref))
-            ref_selection = getattr(ref, "selection", None) or (ref.get("selection") if isinstance(ref, dict) else "")
+            ref_name = _resolve_refinement_name(ref)
+            ref_selection = _resolve_selection_name(ref)
             raw_size = getattr(ref, "element_size", None) if hasattr(ref, "element_size") else (ref.get("element_size") if isinstance(ref, dict) else None)
             res_size = _resolve_numeric_threshold(raw_size, min_val=1e-6)
             ref_size = res_size if res_size is not None else 0.0
