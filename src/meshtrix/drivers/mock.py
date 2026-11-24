@@ -4,6 +4,7 @@ Meshtrix In-Memory Mock Driver for Zero-License Offline Execution.
 Authoritative Reference: ORIGINAL_REQUEST.md §R2 & PROJECT.md
 """
 
+import math
 from typing import Any
 
 from meshtrix.drivers.base import BodyProperties, MechanicalDriver, MeshStatistics
@@ -275,7 +276,7 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def get_failing_elements(self, metric: str, threshold: float) -> list[int]:
         """Retrieve IDs of elements violating a quality metric threshold."""
-        norm_metric = metric.lower().replace("-", "_")
+        norm_metric = metric.lower().replace("-", "_").strip()
         cur_val = 0.0
         if norm_metric == "skewness":
             cur_val = self.get_max_skewness()
@@ -284,7 +285,7 @@ class MockMechanicalDriver(MechanicalDriver):
         elif norm_metric == "warpage":
             cur_val = self.get_max_warpage()
 
-        if cur_val <= threshold:
+        if cur_val is not None and not math.isnan(cur_val) and cur_val <= threshold:
             return []
 
         elements = self._failing_elements.get(norm_metric, self._failing_elements.get(metric))
@@ -335,7 +336,7 @@ class MockMechanicalDriver(MechanicalDriver):
         self._mesh_stats.max_skewness = skewness
         if failing_elements is not None:
             self._failing_elements["skewness"] = list(failing_elements)
-        elif skewness > 0.8:
+        elif skewness is not None and (math.isnan(skewness) or skewness > 0.8):
             self._failing_elements["skewness"] = [1042, 1043, 1044]
 
     def inject_mesh_aspect_ratio(
@@ -346,7 +347,7 @@ class MockMechanicalDriver(MechanicalDriver):
         self._mesh_stats.max_aspect_ratio = aspect_ratio
         if failing_elements is not None:
             self._failing_elements["aspect_ratio"] = list(failing_elements)
-        elif aspect_ratio > 10.0:
+        elif aspect_ratio is not None and (math.isnan(aspect_ratio) or aspect_ratio > 10.0):
             self._failing_elements["aspect_ratio"] = [2041, 2042]
 
     def inject_mesh_warpage(
@@ -357,7 +358,7 @@ class MockMechanicalDriver(MechanicalDriver):
         self._mesh_stats.max_warpage = warpage
         if failing_elements is not None:
             self._failing_elements["warpage"] = list(failing_elements)
-        elif warpage > 45.0:
+        elif warpage is not None and (math.isnan(warpage) or warpage > 45.0):
             self._failing_elements["warpage"] = [3011, 3012]
 
     def inject_mesh_element_count(self, count: int) -> None:

@@ -778,4 +778,101 @@ class TestStep08AdversarialEdgeCases:
         res = step.pre_check(context)
         assert_check_failed(res, expected_code=ERR_MESH_MISSING_SELECTION)
 
+    def test_post_check_nan_skewness_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check strictly detects IEEE 754 NaN skewness as degenerate/failing element geometry."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mock_driver.inject_mesh_skewness(float("nan"))
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+    def test_post_check_nan_aspect_ratio_and_warpage_fail(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check flags NaN aspect ratio and warpage as quality failures."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mock_driver.inject_mesh_aspect_ratio(float("nan"))
+        mock_driver.inject_mesh_warpage(float("nan"))
+        res = step8.post_check(context)
+        assert_check_failed(res)
+        error_codes = [f.error_code for f in res.failures]
+        assert ERR_MESH_ASPECT_RATIO_EXCEEDED in error_codes
+        assert ERR_MESH_WARPAGE_EXCEEDED in error_codes
+
+    def test_post_check_driver_returns_none_quality_metrics_handled(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check gracefully handles driver returning None for quality metrics without TypeError."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mock_driver.get_max_skewness = lambda: None  # type: ignore[assignment,return-value]
+        mock_driver.get_max_aspect_ratio = lambda: None  # type: ignore[assignment,return-value]
+        mock_driver.get_max_warpage = lambda: None  # type: ignore[assignment,return-value]
+        mock_driver.get_element_count = lambda: None  # type: ignore[assignment,return-value]
+
+        res = step8.post_check(context)
+        assert_check_failed(res)
+        error_codes = [f.error_code for f in res.failures]
+        assert ERR_MESH_ELEMENT_COUNT in error_codes
+        assert ERR_MESH_SKEWNESS_EXCEEDED in error_codes
+        assert ERR_MESH_ASPECT_RATIO_EXCEEDED in error_codes
+        assert ERR_MESH_WARPAGE_EXCEEDED in error_codes
+
+    def test_post_check_quality_limits_non_skewness_metric_does_not_pollute_skewness(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """quality_limits with metric='aspect_ratio' does not corrupt skewness threshold."""
+        spec_dict = valid_job_spec.to_dict()
+        spec_dict["mesh"]["quality_limits"] = {
+            "metric": "aspect_ratio",
+            "min_quality": 0.7,
+        }
+        spec = JobSpec.model_validate(spec_dict)
+
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # Skewness 0.35 is nominal (< default 0.85 and < 1 - 0.25 = 0.75).
+        # It must NOT fail against 1 - 0.7 = 0.30!
+        mock_driver.inject_mesh_skewness(0.35)
+        res = step8.post_check(context)
+        assert_check_passed(res)
+
+    def test_get_failing_elements_handles_none_and_nan(self) -> None:
+        """get_failing_elements safely handles None and NaN without crashing."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.generate_mesh()
+
+        # NaN skewness
+        driver.inject_mesh_skewness(float("nan"), [9001])
+        assert driver.get_failing_elements("skewness", 0.85) == [9001]
+
+        # None metric return
+        driver.get_max_aspect_ratio = lambda: None  # type: ignore[assignment,return-value]
+        failing = driver.get_failing_elements("aspect_ratio", 10.0)
+        assert len(failing) > 0
+
 

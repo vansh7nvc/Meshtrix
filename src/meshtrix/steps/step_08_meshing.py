@@ -324,7 +324,7 @@ class Step08Meshing(BaseStep):
         min_elements = quality_limits.min_elements if quality_limits and quality_limits.min_elements is not None else 1
         max_elements = quality_limits.max_elements if quality_limits else None
 
-        if elem_count < min_elements:
+        if elem_count is None or elem_count < min_elements:
             result.add_failure(
                 FailureObject(
                     error_code=ERR_MESH_ELEMENT_COUNT,
@@ -335,6 +335,8 @@ class Step08Meshing(BaseStep):
                     expected_value=f">= {min_elements}",
                     engineering_message=(
                         f"Mesh element count {elem_count} is below required minimum of {min_elements}."
+                        if elem_count is not None
+                        else f"Mesh element count is None (mesh not generated or invalid), expected >= {min_elements}."
                     ),
                     likely_causes=[
                         "Mesh generation failed silently or produced incomplete mesh",
@@ -382,14 +384,14 @@ class Step08Meshing(BaseStep):
         elif context.spec.tolerances and context.spec.tolerances.mesh_skewness_limit is not None:
             skew_thresh = context.spec.tolerances.mesh_skewness_limit
         elif quality_limits and quality_limits.min_quality is not None and (
-            str(quality_limits.metric).lower() == "skewness"
-            or (mesh_spec and str(mesh_spec.quality_metric).lower() == "skewness")
+            str(quality_limits.metric).strip().lower() == "skewness"
+            or (quality_limits.metric is None and mesh_spec and str(mesh_spec.quality_metric).strip().lower() == "skewness")
         ):
             skew_thresh = 1.0 - quality_limits.min_quality
         elif (
             mesh_spec
             and mesh_spec.min_quality is not None
-            and str(mesh_spec.quality_metric).lower() == "skewness"
+            and str(mesh_spec.quality_metric).strip().lower() == "skewness"
         ):
             skew_thresh = 1.0 - mesh_spec.min_quality
         else:
@@ -419,9 +421,20 @@ class Step08Meshing(BaseStep):
 
         # 5. Inspect skewness
         max_skew = context.driver.get_max_skewness()
-        if max_skew > skew_thresh:
-            failing_elements = context.driver.get_failing_elements("skewness", skew_thresh)
+        if max_skew is None or math.isnan(max_skew) or max_skew > skew_thresh:
+            failing_elements = (
+                context.driver.get_failing_elements("skewness", skew_thresh)
+                if hasattr(context.driver, "get_failing_elements")
+                else []
+            )
             elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            measured_repr = f"{max_skew:.4f}" if max_skew is not None and not math.isnan(max_skew) else str(max_skew)
+            msg = (
+                f"Maximum element skewness {measured_repr} exceeds allowable threshold "
+                f"{skew_thresh:.4f} on {elem_desc}."
+                if max_skew is not None and not math.isnan(max_skew)
+                else f"Maximum element skewness is invalid ({measured_repr}) on {elem_desc}, expected <= {skew_thresh:.4f}."
+            )
             result.add_failure(
                 FailureObject(
                     error_code=ERR_MESH_SKEWNESS_EXCEEDED,
@@ -430,10 +443,7 @@ class Step08Meshing(BaseStep):
                     component_or_entity=elem_desc,
                     measured_value=max_skew,
                     expected_value=f"<= {skew_thresh:.4f}",
-                    engineering_message=(
-                        f"Maximum element skewness {max_skew:.4f} exceeds allowable threshold "
-                        f"{skew_thresh:.4f} on {elem_desc}."
-                    ),
+                    engineering_message=msg,
                     likely_causes=[
                         "Distorted elements near high curvature fillets or acute corners",
                         "Coarse mesh transition between disparate shell thicknesses",
@@ -450,9 +460,20 @@ class Step08Meshing(BaseStep):
 
         # 6. Inspect aspect ratio
         max_aspect = context.driver.get_max_aspect_ratio()
-        if max_aspect > aspect_thresh:
-            failing_elements = context.driver.get_failing_elements("aspect_ratio", aspect_thresh)
+        if max_aspect is None or math.isnan(max_aspect) or max_aspect > aspect_thresh:
+            failing_elements = (
+                context.driver.get_failing_elements("aspect_ratio", aspect_thresh)
+                if hasattr(context.driver, "get_failing_elements")
+                else []
+            )
             elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            measured_repr = f"{max_aspect:.2f}" if max_aspect is not None and not math.isnan(max_aspect) else str(max_aspect)
+            msg = (
+                f"Maximum element aspect ratio {measured_repr} exceeds allowable threshold "
+                f"{aspect_thresh:.2f} on {elem_desc}."
+                if max_aspect is not None and not math.isnan(max_aspect)
+                else f"Maximum element aspect ratio is invalid ({measured_repr}) on {elem_desc}, expected <= {aspect_thresh:.2f}."
+            )
             result.add_failure(
                 FailureObject(
                     error_code=ERR_MESH_ASPECT_RATIO_EXCEEDED,
@@ -461,10 +482,7 @@ class Step08Meshing(BaseStep):
                     component_or_entity=elem_desc,
                     measured_value=max_aspect,
                     expected_value=f"<= {aspect_thresh:.2f}",
-                    engineering_message=(
-                        f"Maximum element aspect ratio {max_aspect:.2f} exceeds allowable threshold "
-                        f"{aspect_thresh:.2f} on {elem_desc}."
-                    ),
+                    engineering_message=msg,
                     likely_causes=[
                         "Elongated elements along narrow strips or thin features",
                         "Coarse mesh along high-aspect CAD faces",
@@ -481,9 +499,20 @@ class Step08Meshing(BaseStep):
 
         # 7. Inspect warpage
         max_warp = context.driver.get_max_warpage()
-        if max_warp > warp_thresh:
-            failing_elements = context.driver.get_failing_elements("warpage", warp_thresh)
+        if max_warp is None or math.isnan(max_warp) or max_warp > warp_thresh:
+            failing_elements = (
+                context.driver.get_failing_elements("warpage", warp_thresh)
+                if hasattr(context.driver, "get_failing_elements")
+                else []
+            )
             elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            measured_repr = f"{max_warp:.1f}" if max_warp is not None and not math.isnan(max_warp) else str(max_warp)
+            msg = (
+                f"Maximum element warpage {measured_repr} deg exceeds allowable threshold "
+                f"{warp_thresh:.1f} deg on {elem_desc}."
+                if max_warp is not None and not math.isnan(max_warp)
+                else f"Maximum element warpage is invalid ({measured_repr}) on {elem_desc}, expected <= {warp_thresh:.1f} deg."
+            )
             result.add_failure(
                 FailureObject(
                     error_code=ERR_MESH_WARPAGE_EXCEEDED,
@@ -492,10 +521,7 @@ class Step08Meshing(BaseStep):
                     component_or_entity=elem_desc,
                     measured_value=max_warp,
                     expected_value=f"<= {warp_thresh:.1f} deg",
-                    engineering_message=(
-                        f"Maximum element warpage {max_warp:.1f} deg exceeds allowable threshold "
-                        f"{warp_thresh:.1f} deg on {elem_desc}."
-                    ),
+                    engineering_message=msg,
                     likely_causes=[
                         "Quad shell elements mapped across non-planar or doubly-curved surfaces",
                         "Coarse mesh on twisted geometry",
