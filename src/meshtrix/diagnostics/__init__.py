@@ -1,0 +1,33 @@
+"""Diagnostics schemas, failure models, and error codes."""
+
+from meshtrix.diagnostics.failure import (
+    ERR_DRIVER_COMMUNICATION,
+    ERR_MAT_ASSIGNMENT_MISMATCH,
+    ERR_MAT_INVALID_THICKNESS,
+    ERR_MAT_MISSING_CATALOG,
+    ERR_MAT_NOT_FOUND_IN_CATALOG,
+    ERR_MAT_THICKNESS_MISMATCH,
+    ERR_MAT_UNASSIGNED_BODY,
+    ERR_MAT_UNMAPPED_BODY,
+    ERR_POSTCHECK_FAILED,
+    ERR_PRECHECK_FAILED,
+    FailureObject,
+    Severity,
+    StepCheckResult,
+)
+
+__all__ = [
+    "ERR_DRIVER_COMMUNICATION",
+    "ERR_MAT_ASSIGNMENT_MISMATCH",
+    "ERR_MAT_INVALID_THICKNESS",
+    "ERR_MAT_MISSING_CATALOG",
+    "ERR_MAT_NOT_FOUND_IN_CATALOG",
+    "ERR_MAT_THICKNESS_MISMATCH",
+    "ERR_MAT_UNASSIGNED_BODY",
+    "ERR_MAT_UNMAPPED_BODY",
+    "ERR_POSTCHECK_FAILED",
+    "ERR_PRECHECK_FAILED",
+    "FailureObject",
+    "Severity",
+    "StepCheckResult",
+]
