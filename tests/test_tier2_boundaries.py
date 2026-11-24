@@ -94,7 +94,7 @@ class TestUnitsAndAnalysisBoundaries:
             JobSpec.model_validate(spec_dict)
 
     @pytest.mark.parametrize(
-        "bad_analysis", ["CFD_TURBULENCE", "QUANTUM_MECHANICS", "ELECTROMAGNETIC", "1234"]
+        "bad_analysis", ["CFD_TURBULENCE", "QUANTUM_MECHANICS", "ELECTROMAGNETIC", "1234", ""]
     )
     def test_reject_unsupported_analysis_types(
         self, valid_job_spec_dict: dict[str, Any], bad_analysis: str
@@ -308,3 +308,51 @@ class TestAdversarialInputsAndExtremeValues:
             thickness=extreme_thickness,
         )
         assert mapping.thickness == pytest.approx(extreme_thickness)
+
+
+# ===========================================================================
+# 8. Empty Assembly and Empty Catalog Edge Conditions
+# ===========================================================================
+
+
+class TestEmptyAssemblyAndCatalogBoundaries:
+    """Verifies graceful handling of empty assembly and empty catalog edge conditions."""
+
+    def test_empty_model_and_catalog_graceful_pass(self) -> None:
+        """When CAD model has 0 bodies and JobSpec catalog/mappings are empty, lifecycle passes."""
+        spec_dict = {
+            "job_id": "JOB-EMPTY-001",
+            "units": "Metric_mm",
+            "analysis_type": "STRUCTURAL_STATIC",
+            "materials": {"catalog": {}, "mappings": {}},
+        }
+        spec = JobSpec.model_validate(spec_dict)
+        driver = MockMechanicalDriver()
+        context = RunContext(spec=spec, driver=driver)
+        step = Step06MaterialMapping()
+
+        pre_res = step.pre_check(context)
+        assert_check_passed(pre_res)
+
+        step.execute(context)
+
+        post_res = step.post_check(context)
+        assert_check_passed(post_res)
+
+    def test_cad_bodies_with_empty_catalog_and_mappings_fails_pre_check(self) -> None:
+        """When CAD model contains bodies but JobSpec has empty mappings, pre-check flags ERR_MAT_UNMAPPED_BODY."""
+        spec_dict = {
+            "job_id": "JOB-EMPTY-CATALOG-002",
+            "units": "Metric_mm",
+            "analysis_type": "STRUCTURAL_STATIC",
+            "materials": {"catalog": {}, "mappings": {}},
+        }
+        spec = JobSpec.model_validate(spec_dict)
+        driver = MockMechanicalDriver()
+        driver.add_body("Unmapped_Spar", body_type="solid")
+        context = RunContext(spec=spec, driver=driver)
+        step = Step06MaterialMapping()
+
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code="ERR_MAT_UNMAPPED_BODY")
+        assert res.failures[0].component_or_entity == "Unmapped_Spar"

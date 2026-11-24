@@ -138,12 +138,25 @@ class TestJobSpecSchemaCoverage:
         from_str = JobSpec.from_yaml(yaml_str)
         assert from_str.job_id == valid_job_spec.job_id
 
-        # YAML file serialization
+        # YAML file serialization (Path and str path)
         yaml_file = tmp_path / "spec.yaml"
         valid_job_spec.to_yaml(yaml_file)
         assert yaml_file.exists()
         from_file = JobSpec.from_yaml(yaml_file)
         assert from_file.job_id == valid_job_spec.job_id
+        from_file_str = JobSpec.from_yaml(str(yaml_file))
+        assert from_file_str.job_id == valid_job_spec.job_id
+
+        # Nonexistent Path object raises FileNotFoundError
+        missing_path = tmp_path / "nonexistent_spec.yaml"
+        with pytest.raises(FileNotFoundError):
+            JobSpec.from_yaml(missing_path)
+
+        # Handling of string with special / invalid characters
+        import yaml
+
+        with pytest.raises(yaml.YAMLError):
+            JobSpec.from_yaml("job_id: test\x00")
 
     def test_units_system_and_analysis_type_case_insensitivity(self) -> None:
         """UnitsSystem and AnalysisType resolve case-insensitively and handle variations."""
@@ -182,6 +195,20 @@ class TestJobSpecSchemaCoverage:
         spec = JobSpec.model_validate(spec_dict)
         assert "Bracket_Solid_Base" in spec.materials.mappings
         assert spec.materials.mappings["Web_Plate_Upper"].thickness == pytest.approx(2.5)
+
+        # Normalization when mappings is a list of BodyMaterialMapping instances
+        spec_dict2 = deepcopy(valid_job_spec_dict)
+        spec_dict2["materials"]["mappings"] = [
+            BodyMaterialMapping(body_name="Bracket_Solid_Base", material_name="Structural_Steel"),
+            BodyMaterialMapping(
+                body_name="Web_Plate_Upper",
+                material_name="Aluminum_6061_T6",
+                thickness=2.5,
+            ),
+        ]
+        spec2 = JobSpec.model_validate(spec_dict2)
+        assert "Bracket_Solid_Base" in spec2.materials.mappings
+        assert spec2.materials.mappings["Web_Plate_Upper"].thickness == pytest.approx(2.5)
 
 
 # ===========================================================================
@@ -483,6 +510,26 @@ class TestStep06MaterialMappingFeatureCoverage:
         step = Step06MaterialMapping()
         sample_run_context.driver.disconnect()
         res = step.pre_check(sample_run_context)
+        assert_check_failed(res, expected_code=ERR_DRIVER_COMMUNICATION)
+        assert res.failures[0].severity == Severity.BLOCKING
+        sample_run_context.driver.connect()
+
+    def test_execute_driver_disconnected_raises(self, sample_run_context: RunContext) -> None:
+        """Execute aborts with ConnectionError when driver connection is inactive."""
+        step = Step06MaterialMapping()
+        sample_run_context.driver.disconnect()
+        with pytest.raises(ConnectionError, match="not connected"):
+            step.execute(sample_run_context)
+        sample_run_context.driver.connect()
+
+    def test_post_check_driver_disconnected(self, sample_run_context: RunContext) -> None:
+        """Post-check flags ERR_DRIVER_COMMUNICATION when driver connection drops after execute."""
+        step = Step06MaterialMapping()
+        step.pre_check(sample_run_context)
+        step.execute(sample_run_context)
+
+        sample_run_context.driver.disconnect()
+        res = step.post_check(sample_run_context)
         assert_check_failed(res, expected_code=ERR_DRIVER_COMMUNICATION)
         assert res.failures[0].severity == Severity.BLOCKING
         sample_run_context.driver.connect()
