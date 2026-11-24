@@ -39,6 +39,10 @@ class MeshStatistics:
     node_count: int = 0
     element_count: int = 0
     min_quality: float = 1.0
+    max_skewness: float = 0.0
+    max_aspect_ratio: float = 1.0
+    max_warpage: float = 0.0
+    failing_elements: dict[str, list[int]] | None = None
 
 
 class MechanicalDriver(ABC):
@@ -99,6 +103,55 @@ class MechanicalDriver(ABC):
     @abstractmethod
     def add_body(self, name: str, body_type: str = "solid", thickness: float | None = None) -> None:
         """Add a body representation to the model."""
+
+    @abstractmethod
+    def set_global_mesh_size(self, size: float) -> None:
+        """Set the global element size for meshing."""
+
+    @abstractmethod
+    def set_element_order(self, order: str) -> None:
+        """Set the mesh element formulation order (e.g. 'linear', 'quadratic')."""
+
+    @abstractmethod
+    def add_local_refinement(self, name: str, selection: str, element_size: float) -> None:
+        """Define a local mesh refinement on a named selection."""
+
+    @abstractmethod
+    def generate_mesh(
+        self,
+        global_size: float | None = None,
+        element_order: str | None = None,
+        local_refinements: list[Any] | None = None,
+    ) -> MeshStatistics:
+        """Generate the mesh with global and local settings."""
+
+    @abstractmethod
+    def get_mesh_statistics(self) -> MeshStatistics:
+        """Retrieve aggregated mesh generation statistics and quality metrics."""
+
+    @abstractmethod
+    def get_element_count(self) -> int:
+        """Retrieve the total count of generated mesh elements."""
+
+    @abstractmethod
+    def get_max_skewness(self) -> float:
+        """Retrieve the maximum element skewness in the mesh."""
+
+    @abstractmethod
+    def get_max_aspect_ratio(self) -> float:
+        """Retrieve the maximum element aspect ratio in the mesh."""
+
+    @abstractmethod
+    def get_max_warpage(self) -> float:
+        """Retrieve the maximum element warpage (degrees) in the mesh."""
+
+    @abstractmethod
+    def get_failing_elements(self, metric: str, threshold: float) -> list[int]:
+        """Retrieve IDs of elements violating a quality metric threshold."""
+
+    @abstractmethod
+    def is_mesh_generated(self) -> bool:
+        """Return True if a valid mesh has been successfully generated."""
 
     @abstractmethod
     def clear_faults(self) -> None:

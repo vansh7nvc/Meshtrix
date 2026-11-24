@@ -1,0 +1,514 @@
+"""
+Meshtrix Step 8: Meshing Automation and Quality Verification.
+
+Authoritative Reference: ORIGINAL_REQUEST.md §R1 & PROJECT.md
+"""
+
+from typing import cast
+
+from meshtrix.core.step import BaseStep, RunContext
+from meshtrix.diagnostics.failure import (
+    ERR_DRIVER_COMMUNICATION,
+    ERR_MAT_INVALID_THICKNESS,
+    ERR_MAT_UNASSIGNED_BODY,
+    ERR_MESH_ASPECT_RATIO_EXCEEDED,
+    ERR_MESH_ELEMENT_COUNT,
+    ERR_MESH_GENERATION_FAILED,
+    ERR_MESH_MISSING_SELECTION,
+    ERR_MESH_NO_BODIES,
+    ERR_MESH_SKEWNESS_EXCEEDED,
+    ERR_MESH_SPEC_MISSING,
+    ERR_MESH_WARPAGE_EXCEEDED,
+    FailureObject,
+    Severity,
+    StepCheckResult,
+)
+from meshtrix.drivers.base import BodyProperties
+
+
+class Step08Meshing(BaseStep):
+    """Step 8: Global and local mesh generation, quality inspection, and diagnostic troubleshooting."""
+
+    @property
+    def step_id(self) -> str:
+        """Step identifier."""
+        return "step_08_meshing"
+
+    @property
+    def description(self) -> str:
+        """Step description."""
+        return "Step 8: Meshing Automation & Quality Inspection"
+
+    def pre_check(self, context: RunContext) -> StepCheckResult:
+        """
+        Phase 1: Validate prerequisites before executing meshing.
+
+        Verifies:
+        1. Driver connection is live.
+        2. Mesh specification is provided in JobSpec.
+        3. Model bodies exist in the CAD/preprocessor model.
+        4. Every body has a valid material assigned (from Step 6).
+        5. Every surface/shell body has a valid positive thickness assigned.
+        6. Local refinement named selections exist in the preprocessor model (if specified).
+        """
+        result = StepCheckResult(step_id=self.step_id)
+
+        # 1. Driver connection verification
+        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_DRIVER_COMMUNICATION,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalDriver",
+                    measured_value="Disconnected",
+                    expected_value="Connected",
+                    engineering_message="Mechanical driver is not connected during pre-check.",
+                    likely_causes=[
+                        "Solver process crashed or failed to start",
+                        "Network timeout or gRPC communication drop",
+                    ],
+                    suggested_fixes=["Reconnect driver port to Mechanical instance"],
+                    resume_step_id=self.step_id,
+                )
+            )
+            return result
+
+        # 2. Verify mesh specification exists in JobSpec
+        if context.spec.mesh is None:
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_SPEC_MISSING,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="JobSpec.mesh",
+                    measured_value=None,
+                    expected_value="Defined MeshSettings",
+                    engineering_message="JobSpec does not define required mesh settings.",
+                    likely_causes=[
+                        "JobSpec missing 'mesh' configuration block",
+                        "Incomplete specification passed to runner",
+                    ],
+                    suggested_fixes=[
+                        "Add 'mesh' section with global_size and element_order to JobSpec"
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+            return result
+
+        # 3. Verify bodies exist in model
+        model_bodies = cast(list[BodyProperties], context.driver.get_bodies())
+        if not model_bodies:
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_NO_BODIES,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalModel",
+                    measured_value=0,
+                    expected_value=">= 1 CAD body",
+                    engineering_message="CAD model contains no bodies to mesh.",
+                    likely_causes=[
+                        "Geometry import failed or geometry was not transferred",
+                        "All CAD bodies suppressed or deleted",
+                    ],
+                    suggested_fixes=[
+                        "Verify CAD geometry transfer in Step 4",
+                        "Ensure at least one unsuppressed body exists in Mechanical model",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+            return result
+
+        # 4 & 5. Verify material and thickness assignments on every body
+        for body in model_bodies:
+            assigned_mat = context.driver.get_assigned_material(body.name)
+            if not assigned_mat:
+                result.add_failure(
+                    FailureObject(
+                        error_code=ERR_MAT_UNASSIGNED_BODY,
+                        severity=Severity.BLOCKING,
+                        step_id=self.step_id,
+                        component_or_entity=body.name,
+                        measured_value=None,
+                        expected_value="Valid assigned material",
+                        engineering_message=(
+                            f"Body '{body.name}' has no material assigned prior to meshing. "
+                            f"Material assignment must precede mesh generation."
+                        ),
+                        likely_causes=[
+                            "Step 6 Material Mapping was skipped or failed",
+                            "Body was newly added without running Step 6",
+                        ],
+                        suggested_fixes=[
+                            f"Execute Step 6 Material Mapping for body '{body.name}'",
+                            f"Assign a valid material to body '{body.name}' in JobSpec",
+                        ],
+                        resume_step_id="step_06_materials",
+                    )
+                )
+
+            if body.body_type == "surface":
+                assigned_thk = context.driver.get_shell_thickness(body.name)
+                if assigned_thk is None or assigned_thk <= 0.0:
+                    result.add_failure(
+                        FailureObject(
+                            error_code=ERR_MAT_INVALID_THICKNESS,
+                            severity=Severity.BLOCKING,
+                            step_id=self.step_id,
+                            component_or_entity=body.name,
+                            measured_value=assigned_thk,
+                            expected_value="> 0.0 mm",
+                            engineering_message=(
+                                f"Surface body '{body.name}' requires positive shell thickness before meshing, "
+                                f"but found {assigned_thk}."
+                            ),
+                            likely_causes=[
+                                "Step 6 failed to assign shell thickness to surface body",
+                                "Zero or negative thickness assigned in JobSpec",
+                            ],
+                            suggested_fixes=[
+                                f"Assign positive shell thickness to surface body '{body.name}' in JobSpec",
+                                "Re-run Step 6 Material Mapping",
+                            ],
+                            resume_step_id="step_06_materials",
+                        )
+                    )
+
+        # 6. Verify local refinement named selections exist in model
+        if context.spec.mesh.local_refinements and hasattr(context.driver, "get_named_selections"):
+            existing_selections = set(context.driver.get_named_selections())
+            # Only validate if driver has named selections registered
+            if existing_selections:
+                for ref in context.spec.mesh.local_refinements:
+                    if ref.selection not in existing_selections:
+                        result.add_failure(
+                            FailureObject(
+                                error_code=ERR_MESH_MISSING_SELECTION,
+                                severity=Severity.BLOCKING,
+                                step_id=self.step_id,
+                                component_or_entity=ref.name,
+                                measured_value=ref.selection,
+                                expected_value=f"One of {sorted(existing_selections)}",
+                                engineering_message=(
+                                    f"Local mesh refinement '{ref.name}' references non-existent "
+                                    f"named selection '{ref.selection}'."
+                                ),
+                                likely_causes=[
+                                    f"Named selection '{ref.selection}' not created in Step 3",
+                                    f"Typo in named selection identifier '{ref.selection}'",
+                                ],
+                                suggested_fixes=[
+                                    f"Create named selection '{ref.selection}' in Mechanical model",
+                                    f"Update refinement '{ref.name}' in JobSpec to reference an existing selection",
+                                ],
+                                resume_step_id="step_03_named_selections",
+                            )
+                        )
+
+        return result
+
+    def execute(self, context: RunContext) -> None:
+        """
+        Phase 2: Apply mesh controls and trigger mesh generation.
+
+        1. Verifies driver connection.
+        2. Applies global mesh size.
+        3. Applies element formulation order.
+        4. Applies all local mesh refinements from JobSpec.
+        5. Triggers solver mesh generation.
+        """
+        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+            raise ConnectionError("Mechanical driver is not connected.")
+
+        if context.spec.mesh is None:
+            raise ValueError("JobSpec mesh settings are missing.")
+
+        mesh_spec = context.spec.mesh
+
+        # 1. Apply global mesh sizing
+        context.driver.set_global_mesh_size(mesh_spec.global_size)
+
+        # 2. Apply element order
+        context.driver.set_element_order(str(mesh_spec.element_order))
+
+        # 3. Apply local mesh refinements
+        for ref in mesh_spec.local_refinements:
+            context.driver.add_local_refinement(
+                name=ref.name,
+                selection=ref.selection,
+                element_size=ref.element_size,
+            )
+
+        # 4. Trigger mesh generation via driver
+        stats = context.driver.generate_mesh(
+            global_size=mesh_spec.global_size,
+            element_order=str(mesh_spec.element_order),
+            local_refinements=mesh_spec.local_refinements,
+        )
+
+        context.step_data["mesh_statistics"] = stats
+
+    def post_check(self, context: RunContext) -> StepCheckResult:
+        """
+        Phase 3: Inspect driver mesh quality metrics against specification thresholds.
+
+        Verifies:
+        1. Driver connection is live.
+        2. Mesh has been successfully generated.
+        3. Element count is positive and satisfies bounds.
+        4. Maximum skewness satisfies quality threshold.
+        5. Maximum aspect ratio satisfies quality threshold.
+        6. Maximum warpage satisfies quality threshold.
+        """
+        result = StepCheckResult(step_id=self.step_id)
+
+        # 1. Driver connection verification
+        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_DRIVER_COMMUNICATION,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalDriver",
+                    measured_value="Disconnected",
+                    expected_value="Connected",
+                    engineering_message="Mechanical driver is not connected during post-check.",
+                    likely_causes=[
+                        "Solver process crashed or terminated during meshing",
+                        "Network timeout or gRPC communication drop",
+                    ],
+                    suggested_fixes=["Reconnect driver port to Mechanical instance"],
+                    resume_step_id=self.step_id,
+                )
+            )
+            return result
+
+        # 2. Check mesh generation status
+        if hasattr(context.driver, "is_mesh_generated") and not context.driver.is_mesh_generated():
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_GENERATION_FAILED,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalMesh",
+                    measured_value="Not Generated",
+                    expected_value="Generated",
+                    engineering_message="Mesh generation failed or produced zero elements.",
+                    likely_causes=[
+                        "Geometry features too small for specified mesh sizing",
+                        "Conflicting local mesh refinements or unmeshable topology",
+                        "Solver meshing kernel error or memory exhaustion",
+                    ],
+                    suggested_fixes=[
+                        "Adjust global mesh size to capture geometry features",
+                        "Inspect CAD geometry for sliver faces or knife edges",
+                        "Review solver meshing diagnostics log",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+            return result
+
+        mesh_spec = context.spec.mesh
+        quality_limits = mesh_spec.quality_limits if mesh_spec else None
+
+        # 3. Element count validation
+        elem_count = context.driver.get_element_count()
+        min_elements = quality_limits.min_elements if quality_limits and quality_limits.min_elements is not None else 1
+        max_elements = quality_limits.max_elements if quality_limits else None
+
+        if elem_count < min_elements:
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_ELEMENT_COUNT,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalMesh",
+                    measured_value=elem_count,
+                    expected_value=f">= {min_elements}",
+                    engineering_message=(
+                        f"Mesh element count {elem_count} is below required minimum of {min_elements}."
+                    ),
+                    likely_causes=[
+                        "Mesh generation failed silently or produced incomplete mesh",
+                        "Global element size too large for geometry volume",
+                    ],
+                    suggested_fixes=[
+                        "Reduce global mesh size in JobSpec",
+                        "Ensure all geometry bodies are unsuppressed and meshable",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+        elif max_elements is not None and elem_count > max_elements:
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_ELEMENT_COUNT,
+                    severity=Severity.WARNING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalMesh",
+                    measured_value=elem_count,
+                    expected_value=f"<= {max_elements}",
+                    engineering_message=(
+                        f"Mesh element count {elem_count} exceeds recommended maximum of {max_elements}."
+                    ),
+                    likely_causes=[
+                        "Element size too fine, causing solver solve time inflation",
+                        "Overly aggressive local refinement settings",
+                    ],
+                    suggested_fixes=[
+                        "Increase global element size",
+                        "Relax local mesh refinement sizes",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+
+        # 4. Resolve quality metric thresholds
+        # Skewness threshold resolution:
+        # Priority: quality_limits.max_skewness -> mesh.max_skewness -> tolerances.mesh_skewness_limit ->
+        #           (1.0 - min_quality) if skewness metric -> default 0.85
+        if quality_limits and quality_limits.max_skewness is not None:
+            skew_thresh = quality_limits.max_skewness
+        elif mesh_spec and mesh_spec.max_skewness is not None:
+            skew_thresh = mesh_spec.max_skewness
+        elif context.spec.tolerances and context.spec.tolerances.mesh_skewness_limit is not None:
+            skew_thresh = context.spec.tolerances.mesh_skewness_limit
+        elif quality_limits and quality_limits.min_quality is not None and (
+            quality_limits.metric == "skewness" or (mesh_spec and mesh_spec.quality_metric == "skewness")
+        ):
+            skew_thresh = 1.0 - quality_limits.min_quality
+        elif mesh_spec and mesh_spec.min_quality is not None and mesh_spec.quality_metric == "skewness":
+            skew_thresh = 1.0 - mesh_spec.min_quality
+        else:
+            skew_thresh = 0.85
+
+        # Aspect ratio threshold resolution:
+        # Priority: quality_limits.max_aspect_ratio -> mesh.max_aspect_ratio -> tolerances.mesh_aspect_ratio_limit -> default 10.0
+        if quality_limits and quality_limits.max_aspect_ratio is not None:
+            aspect_thresh = quality_limits.max_aspect_ratio
+        elif mesh_spec and mesh_spec.max_aspect_ratio is not None:
+            aspect_thresh = mesh_spec.max_aspect_ratio
+        elif context.spec.tolerances and context.spec.tolerances.mesh_aspect_ratio_limit is not None:
+            aspect_thresh = context.spec.tolerances.mesh_aspect_ratio_limit
+        else:
+            aspect_thresh = 10.0
+
+        # Warpage threshold resolution:
+        # Priority: quality_limits.max_warpage -> mesh.max_warpage -> tolerances.mesh_warpage_limit -> default 45.0 degrees
+        if quality_limits and quality_limits.max_warpage is not None:
+            warp_thresh = quality_limits.max_warpage
+        elif mesh_spec and mesh_spec.max_warpage is not None:
+            warp_thresh = mesh_spec.max_warpage
+        elif context.spec.tolerances and context.spec.tolerances.mesh_warpage_limit is not None:
+            warp_thresh = context.spec.tolerances.mesh_warpage_limit
+        else:
+            warp_thresh = 45.0
+
+        # 5. Inspect skewness
+        max_skew = context.driver.get_max_skewness()
+        if max_skew > skew_thresh:
+            failing_elements = context.driver.get_failing_elements("skewness", skew_thresh)
+            elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_SKEWNESS_EXCEEDED,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity=elem_desc,
+                    measured_value=max_skew,
+                    expected_value=f"<= {skew_thresh:.4f}",
+                    engineering_message=(
+                        f"Maximum element skewness {max_skew:.4f} exceeds allowable threshold "
+                        f"{skew_thresh:.4f} on {elem_desc}."
+                    ),
+                    likely_causes=[
+                        "Distorted elements near high curvature fillets or acute corners",
+                        "Coarse mesh transition between disparate shell thicknesses",
+                        "Poor surface midsurface trimming or sliver surfaces in CAD",
+                    ],
+                    suggested_fixes=[
+                        f"Apply local mesh refinement with smaller element size on named selection around {elem_desc}",
+                        "Reduce global mesh size in JobSpec",
+                        "Enable quad-dominant or triangle transition meshing in curvature zones",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+
+        # 6. Inspect aspect ratio
+        max_aspect = context.driver.get_max_aspect_ratio()
+        if max_aspect > aspect_thresh:
+            failing_elements = context.driver.get_failing_elements("aspect_ratio", aspect_thresh)
+            elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_ASPECT_RATIO_EXCEEDED,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity=elem_desc,
+                    measured_value=max_aspect,
+                    expected_value=f"<= {aspect_thresh:.2f}",
+                    engineering_message=(
+                        f"Maximum element aspect ratio {max_aspect:.2f} exceeds allowable threshold "
+                        f"{aspect_thresh:.2f} on {elem_desc}."
+                    ),
+                    likely_causes=[
+                        "Elongated elements along narrow strips or thin features",
+                        "Coarse mesh along high-aspect CAD faces",
+                        "Anisotropic sizing without curvature adaptation",
+                    ],
+                    suggested_fixes=[
+                        f"Apply local mesh refinement on named selection around {elem_desc}",
+                        "Reduce global mesh size in JobSpec",
+                        "Split long narrow faces in CAD model",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+
+        # 7. Inspect warpage
+        max_warp = context.driver.get_max_warpage()
+        if max_warp > warp_thresh:
+            failing_elements = context.driver.get_failing_elements("warpage", warp_thresh)
+            elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_MESH_WARPAGE_EXCEEDED,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity=elem_desc,
+                    measured_value=max_warp,
+                    expected_value=f"<= {warp_thresh:.1f} deg",
+                    engineering_message=(
+                        f"Maximum element warpage {max_warp:.1f} deg exceeds allowable threshold "
+                        f"{warp_thresh:.1f} deg on {elem_desc}."
+                    ),
+                    likely_causes=[
+                        "Quad shell elements mapped across non-planar or doubly-curved surfaces",
+                        "Coarse mesh on twisted geometry",
+                        "Mid-surface extraction deviation",
+                    ],
+                    suggested_fixes=[
+                        f"Refine mesh size on curved regions near {elem_desc} to improve planarity",
+                        "Switch element shape to triangles or split warped quads",
+                        "Add local mesh refinement on non-planar named selections",
+                    ],
+                    resume_step_id=self.step_id,
+                )
+            )
+
+        return result
+
+    def troubleshoot(
+        self, context: RunContext, check_result: StepCheckResult
+    ) -> list[FailureObject]:
+        """Phase 4: Return structured FailureObjects identifying failing element sets and recommended local refinement actions."""
+        return list(check_result.failures)
+
+
+# Alias Step08MeshingAutomation for architectural flexibility
+Step08MeshingAutomation = Step08Meshing
