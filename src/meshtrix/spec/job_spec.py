@@ -261,14 +261,19 @@ class JobSpec(BaseModel):
     @classmethod
     def from_yaml(cls, path_or_yaml: str | Path) -> "JobSpec":
         """Load JobSpec from YAML string or file path."""
-        try:
-            path = Path(path_or_yaml)
-            if path.exists() and path.is_file():
-                content = path.read_text(encoding="utf-8")
-            else:
+        if isinstance(path_or_yaml, Path):
+            if not path_or_yaml.exists() or not path_or_yaml.is_file():
+                raise FileNotFoundError(f"JobSpec file not found: {path_or_yaml}")
+            content = path_or_yaml.read_text(encoding="utf-8")
+        else:
+            try:
+                path = Path(path_or_yaml)
+                if path.exists() and path.is_file():
+                    content = path.read_text(encoding="utf-8")
+                else:
+                    content = str(path_or_yaml)
+            except (OSError, ValueError):
                 content = str(path_or_yaml)
-        except (OSError, ValueError):
-            content = str(path_or_yaml)
         data = yaml.safe_load(content)
         return cls.model_validate(data)
 

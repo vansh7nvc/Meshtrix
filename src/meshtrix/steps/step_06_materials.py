@@ -189,6 +189,9 @@ class Step06MaterialMapping(BaseStep):
         2. Assigns specified materials to CAD bodies.
         3. Assigns shell thicknesses to surface bodies.
         """
+        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+            raise ConnectionError("Mechanical driver is not connected.")
+
         # Register all catalog materials
         for mat_name, mat_entry in context.spec.materials.catalog.items():
             context.driver.register_material(mat_name, mat_entry)
@@ -208,11 +211,34 @@ class Step06MaterialMapping(BaseStep):
         Phase 3: Inspect driver state and verify against input specification.
 
         Verifies:
-        1. Every CAD body has a material assigned.
-        2. Assigned material strictly matches the specification.
-        3. Assigned shell thickness on surface bodies matches specification within tolerance.
+        1. Driver connection is live.
+        2. Every CAD body has a material assigned.
+        3. Assigned material strictly matches the specification.
+        4. Assigned shell thickness on surface bodies matches specification within tolerance.
         """
         result = StepCheckResult(step_id=self.step_id)
+
+        # 1. Driver connection verification
+        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+            result.add_failure(
+                FailureObject(
+                    error_code=ERR_DRIVER_COMMUNICATION,
+                    severity=Severity.BLOCKING,
+                    step_id=self.step_id,
+                    component_or_entity="MechanicalDriver",
+                    measured_value="Disconnected",
+                    expected_value="Connected",
+                    engineering_message="Mechanical driver is not connected during post-check.",
+                    likely_causes=[
+                        "Solver process crashed or terminated during execution",
+                        "Network timeout or gRPC communication drop",
+                    ],
+                    suggested_fixes=["Reconnect driver port to Mechanical instance"],
+                    resume_step_id=self.step_id,
+                )
+            )
+            return result
+
         model_bodies = cast(list[BodyProperties], context.driver.get_bodies())
         spec_mappings = context.spec.materials.mappings
         tol = context.spec.tolerances.thickness_tolerance if context.spec.tolerances else 0.01

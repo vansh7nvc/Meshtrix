@@ -102,7 +102,10 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def get_assigned_material(self, body_name: str) -> str | None:
         """Retrieve the material currently assigned to a body."""
-        return self._assigned_materials.get(body_name)
+        if body_name in self._assigned_materials:
+            return self._assigned_materials[body_name]
+        body = self._bodies.get(body_name)
+        return body.material_name if body else None
 
     def set_shell_thickness(self, body_name: str, thickness: float) -> None:
         """Set shell thickness for a surface body."""
