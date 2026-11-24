@@ -154,5 +154,13 @@ class MechanicalDriver(ABC):
         """Return True if a valid mesh has been successfully generated."""
 
     @abstractmethod
+    def create_named_selection(self, name: str, entities: list[str]) -> None:
+        """Create a named selection."""
+
+    @abstractmethod
+    def get_named_selections(self) -> list[str]:
+        """List all named selection identifiers."""
+
+    @abstractmethod
     def clear_faults(self) -> None:
         """Reset or clear all simulated faults and restore nominal states."""

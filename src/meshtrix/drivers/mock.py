@@ -156,10 +156,15 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def set_element_order(self, order: str) -> None:
         """Set the mesh element formulation order (e.g. 'linear', 'quadratic')."""
-        self._element_order = order
+        self._element_order = str(order).lower()
 
     def add_local_refinement(self, name: str, selection: str, element_size: float) -> None:
         """Define a local mesh refinement on a named selection."""
+        for ref in self._local_refinements:
+            if ref["name"] == name:
+                ref["selection"] = selection
+                ref["element_size"] = element_size
+                return
         self._local_refinements.append(
             {"name": name, "selection": selection, "element_size": element_size}
         )
@@ -178,7 +183,7 @@ class MockMechanicalDriver(MechanicalDriver):
         if global_size is not None:
             self._global_mesh_size = global_size
         if element_order is not None:
-            self._element_order = element_order
+            self._element_order = str(element_order).lower()
         if local_refinements is not None:
             for ref in local_refinements:
                 if hasattr(ref, "name"):
@@ -200,7 +205,7 @@ class MockMechanicalDriver(MechanicalDriver):
             return self._mesh_stats
 
         body_count = max(1, len(self._bodies))
-        size = self._global_mesh_size or 5.0
+        size = max(0.001, self._global_mesh_size or 5.0)
         base_elem_count = int(max(100, 1000 * body_count / size))
         refinement_elem_count = len(self._local_refinements) * 250
         total_elements = (
@@ -208,7 +213,7 @@ class MockMechanicalDriver(MechanicalDriver):
             if self._injected_element_count is not None
             else (base_elem_count + refinement_elem_count)
         )
-        mult = 8 if self._element_order == "quadratic" else 4
+        mult = 8 if self._element_order in ("quadratic", "2", "second") else 4
         total_nodes = total_elements * mult
 
         skew = self._injected_max_skewness if self._injected_max_skewness is not None else 0.28
@@ -270,16 +275,17 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def get_failing_elements(self, metric: str, threshold: float) -> list[int]:
         """Retrieve IDs of elements violating a quality metric threshold."""
-        elements = self._failing_elements.get(metric)
-        if elements:
+        norm_metric = metric.lower().replace("-", "_")
+        elements = self._failing_elements.get(norm_metric, self._failing_elements.get(metric))
+        if elements is not None:
             return list(elements)
 
         cur_val = 0.0
-        if metric == "skewness":
+        if norm_metric == "skewness":
             cur_val = self.get_max_skewness()
-        elif metric in ("aspect_ratio", "aspect"):
+        elif norm_metric in ("aspect_ratio", "aspect"):
             cur_val = self.get_max_aspect_ratio()
-        elif metric == "warpage":
+        elif norm_metric == "warpage":
             cur_val = self.get_max_warpage()
 
         if cur_val > threshold:

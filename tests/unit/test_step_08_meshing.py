@@ -577,3 +577,122 @@ class TestStep06And08EndToEndIntegration:
         assert driver.get_max_skewness() <= 0.75
         assert driver.get_max_aspect_ratio() <= 10.0
         assert driver.get_max_warpage() <= 45.0
+
+
+# ===========================================================================
+# 8. Adversarial Edge Cases and Hardened Scenarios
+# ===========================================================================
+
+
+class TestStep08AdversarialEdgeCases:
+    """Rigorous adversarial edge cases: empty selections, shell aliases, idempotency, warnings."""
+
+    def test_pre_check_local_refinement_zero_named_selections_in_model_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check strictly flags ERR_MESH_MISSING_SELECTION when model has ZERO named selections."""
+        for body in mock_driver.get_bodies():
+            mock_driver.assign_material(body.name, "Structural_Steel")
+            if body.body_type == "surface":
+                mock_driver.set_shell_thickness(body.name, 2.0)
+
+        # Driver has NO named selections created (empty list)
+        assert len(mock_driver.get_named_selections()) == 0
+
+        spec_dict = valid_job_spec.to_dict()
+        spec_dict["mesh"]["local_refinements"] = [
+            {"name": "RefineHoles", "selection": "NS_NONEXISTENT", "element_size": 1.0}
+        ]
+        spec = JobSpec.model_validate(spec_dict)
+
+        context = RunContext(spec=spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_MISSING_SELECTION)
+        assert res.failures[0].component_or_entity == "RefineHoles"
+        assert "none found" in str(res.failures[0].expected_value).lower()
+
+    def test_pre_check_shell_body_type_missing_thickness_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check checks thickness for body_type='shell' (interchangeable with 'surface')."""
+        mock_driver.add_body("Fuselage_Shell", body_type="shell", thickness=None)
+        mock_driver.assign_material("Fuselage_Shell", "Structural_Steel")
+
+        for body in mock_driver.get_bodies():
+            mock_driver.assign_material(body.name, "Structural_Steel")
+            if body.body_type in ("surface", "shell") and body.name != "Fuselage_Shell":
+                mock_driver.set_shell_thickness(body.name, 2.0)
+
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MAT_INVALID_THICKNESS)
+        assert any(f.component_or_entity == "Fuselage_Shell" for f in res.failures)
+
+    def test_add_local_refinement_idempotent_update(self) -> None:
+        """Driver add_local_refinement updates existing entry by name instead of duplicating."""
+        driver = MockMechanicalDriver()
+        driver.add_body("Body1", body_type="solid")
+        driver.add_local_refinement("RefineWeld", "NS_WELD", 2.0)
+        assert len(driver.get_local_refinements()) == 1
+        assert driver.get_local_refinements()[0]["element_size"] == pytest.approx(2.0)
+
+        # Update refinement with smaller element size
+        driver.add_local_refinement("RefineWeld", "NS_WELD", 1.0)
+        assert len(driver.get_local_refinements()) == 1
+        assert driver.get_local_refinements()[0]["element_size"] == pytest.approx(1.0)
+
+    def test_mesh_generation_uppercase_quadratic_order(self) -> None:
+        """Driver handles uppercase or variant element_order ('QUADRATIC') as quadratic."""
+        driver = MockMechanicalDriver()
+        driver.add_body("Body1", body_type="solid")
+        stats = driver.generate_mesh(global_size=5.0, element_order="QUADRATIC")
+        assert stats.node_count == stats.element_count * 8
+
+    def test_post_check_element_count_exceeds_maximum_warning(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check flags ERR_MESH_ELEMENT_COUNT as WARNING (non-blocking) when count exceeds max_elements."""
+        spec_dict = valid_job_spec.to_dict()
+        spec_dict["mesh"]["quality_limits"] = {
+            "min_elements": 100,
+            "max_elements": 500,
+        }
+        spec = JobSpec.model_validate(spec_dict)
+
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # Inject high element count (800 > max 500)
+        mock_driver.inject_mesh_element_count(800)
+        res = step8.post_check(context)
+
+        # Result is non-blocking warning: passed is True, is_successful is True
+        assert res.passed is True
+        assert res.is_successful is True
+        assert len(res.failures) == 1
+        assert res.failures[0].error_code == ERR_MESH_ELEMENT_COUNT
+        assert res.failures[0].severity == Severity.WARNING
+
+    def test_pre_check_none_driver_handled_cleanly(self, valid_job_spec: JobSpec) -> None:
+        """Pre-check handles None driver cleanly without AttributeError."""
+        context = RunContext(spec=valid_job_spec, driver=None)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_DRIVER_COMMUNICATION)
+
+    def test_get_failing_elements_case_insensitive(self) -> None:
+        """Quality metric query handles case variations and hyphens."""
+        driver = MockMechanicalDriver()
+        driver.add_body("Body1", body_type="solid")
+        driver.generate_mesh(global_size=5.0)
+        driver.inject_mesh_skewness(0.92, [1001, 1002])
+
+        assert driver.get_failing_elements("SKEWNESS", 0.85) == [1001, 1002]
+        assert driver.get_failing_elements("skewness", 0.85) == [1001, 1002]
+

@@ -54,7 +54,7 @@ class Step08Meshing(BaseStep):
         result = StepCheckResult(step_id=self.step_id)
 
         # 1. Driver connection verification
-        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+        if context.driver is None or (hasattr(context.driver, "is_connected") and not context.driver.is_connected()):
             result.add_failure(
                 FailureObject(
                     error_code=ERR_DRIVER_COMMUNICATION,
@@ -150,7 +150,7 @@ class Step08Meshing(BaseStep):
                     )
                 )
 
-            if body.body_type == "surface":
+            if str(body.body_type).lower() in ("surface", "shell"):
                 assigned_thk = context.driver.get_shell_thickness(body.name)
                 if assigned_thk is None or assigned_thk <= 0.0:
                     result.add_failure(
@@ -180,33 +180,36 @@ class Step08Meshing(BaseStep):
         # 6. Verify local refinement named selections exist in model
         if context.spec.mesh.local_refinements and hasattr(context.driver, "get_named_selections"):
             existing_selections = set(context.driver.get_named_selections())
-            # Only validate if driver has named selections registered
-            if existing_selections:
-                for ref in context.spec.mesh.local_refinements:
-                    if ref.selection not in existing_selections:
-                        result.add_failure(
-                            FailureObject(
-                                error_code=ERR_MESH_MISSING_SELECTION,
-                                severity=Severity.BLOCKING,
-                                step_id=self.step_id,
-                                component_or_entity=ref.name,
-                                measured_value=ref.selection,
-                                expected_value=f"One of {sorted(existing_selections)}",
-                                engineering_message=(
-                                    f"Local mesh refinement '{ref.name}' references non-existent "
-                                    f"named selection '{ref.selection}'."
-                                ),
-                                likely_causes=[
-                                    f"Named selection '{ref.selection}' not created in Step 3",
-                                    f"Typo in named selection identifier '{ref.selection}'",
-                                ],
-                                suggested_fixes=[
-                                    f"Create named selection '{ref.selection}' in Mechanical model",
-                                    f"Update refinement '{ref.name}' in JobSpec to reference an existing selection",
-                                ],
-                                resume_step_id="step_03_named_selections",
-                            )
+            for ref in context.spec.mesh.local_refinements:
+                if ref.selection not in existing_selections:
+                    expected_str = (
+                        f"One of {sorted(existing_selections)}"
+                        if existing_selections
+                        else "Existing named selection in model (none found)"
+                    )
+                    result.add_failure(
+                        FailureObject(
+                            error_code=ERR_MESH_MISSING_SELECTION,
+                            severity=Severity.BLOCKING,
+                            step_id=self.step_id,
+                            component_or_entity=ref.name,
+                            measured_value=ref.selection,
+                            expected_value=expected_str,
+                            engineering_message=(
+                                f"Local mesh refinement '{ref.name}' references non-existent "
+                                f"named selection '{ref.selection}'."
+                            ),
+                            likely_causes=[
+                                f"Named selection '{ref.selection}' not created in Step 3",
+                                f"Typo in named selection identifier '{ref.selection}'",
+                            ],
+                            suggested_fixes=[
+                                f"Create named selection '{ref.selection}' in Mechanical model",
+                                f"Update refinement '{ref.name}' in JobSpec to reference an existing selection",
+                            ],
+                            resume_step_id="step_03_named_selections",
                         )
+                    )
 
         return result
 
@@ -266,7 +269,7 @@ class Step08Meshing(BaseStep):
         result = StepCheckResult(step_id=self.step_id)
 
         # 1. Driver connection verification
-        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+        if context.driver is None or (hasattr(context.driver, "is_connected") and not context.driver.is_connected()):
             result.add_failure(
                 FailureObject(
                     error_code=ERR_DRIVER_COMMUNICATION,
