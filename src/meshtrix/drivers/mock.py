@@ -286,7 +286,14 @@ class MockMechanicalDriver(MechanicalDriver):
             cur_val = self.get_max_warpage()
 
         if (
-            cur_val is not None
+            threshold is not None
+            and isinstance(threshold, (int, float))
+            and not isinstance(threshold, bool)
+            and not math.isnan(threshold)
+            and not math.isinf(threshold)
+            and cur_val is not None
+            and isinstance(cur_val, (int, float))
+            and not isinstance(cur_val, bool)
             and not math.isnan(cur_val)
             and not math.isinf(cur_val)
             and cur_val <= threshold
@@ -342,7 +349,12 @@ class MockMechanicalDriver(MechanicalDriver):
         if failing_elements is not None:
             self._failing_elements["skewness"] = list(failing_elements)
         elif skewness is not None and (
-            math.isnan(skewness) or math.isinf(skewness) or skewness < 0.0 or skewness > 0.8
+            not isinstance(skewness, (int, float))
+            or isinstance(skewness, bool)
+            or math.isnan(skewness)
+            or math.isinf(skewness)
+            or skewness < 0.0
+            or skewness > 0.8
         ):
             self._failing_elements["skewness"] = [1042, 1043, 1044]
 
@@ -355,7 +367,12 @@ class MockMechanicalDriver(MechanicalDriver):
         if failing_elements is not None:
             self._failing_elements["aspect_ratio"] = list(failing_elements)
         elif aspect_ratio is not None and (
-            math.isnan(aspect_ratio) or math.isinf(aspect_ratio) or aspect_ratio < 1.0 or aspect_ratio > 10.0
+            not isinstance(aspect_ratio, (int, float))
+            or isinstance(aspect_ratio, bool)
+            or math.isnan(aspect_ratio)
+            or math.isinf(aspect_ratio)
+            or aspect_ratio < 1.0
+            or aspect_ratio > 10.0
         ):
             self._failing_elements["aspect_ratio"] = [2041, 2042]
 
@@ -368,14 +385,27 @@ class MockMechanicalDriver(MechanicalDriver):
         if failing_elements is not None:
             self._failing_elements["warpage"] = list(failing_elements)
         elif warpage is not None and (
-            math.isnan(warpage) or math.isinf(warpage) or warpage < 0.0 or warpage > 45.0
+            not isinstance(warpage, (int, float))
+            or isinstance(warpage, bool)
+            or math.isnan(warpage)
+            or math.isinf(warpage)
+            or warpage < 0.0
+            or warpage > 45.0
         ):
             self._failing_elements["warpage"] = [3011, 3012]
 
     def inject_mesh_element_count(self, count: Any) -> None:
         """Inject an abnormal mesh element count."""
         self._injected_element_count = count
-        self._mesh_stats.element_count = count if isinstance(count, int) else 0
+        if (
+            isinstance(count, (int, float))
+            and not isinstance(count, bool)
+            and not math.isnan(count)
+            and not math.isinf(count)
+        ):
+            self._mesh_stats.element_count = int(count)
+        else:
+            self._mesh_stats.element_count = 0
 
     def inject_mesh_generation_failure(self, fail: bool = True) -> None:
         """Inject simulated mesh generation failure."""
@@ -399,7 +429,18 @@ class MockMechanicalDriver(MechanicalDriver):
         self._inject_mesh_generation_failure_flag = False
         self._failing_elements.clear()
 
-        if self._mesh_generated:
+        if self._nominal_mesh_stats.element_count > 0:
+            self._mesh_generated = True
+            self._mesh_stats = MeshStatistics(
+                node_count=self._nominal_mesh_stats.node_count,
+                element_count=self._nominal_mesh_stats.element_count,
+                min_quality=self._nominal_mesh_stats.min_quality,
+                max_skewness=self._nominal_mesh_stats.max_skewness,
+                max_aspect_ratio=self._nominal_mesh_stats.max_aspect_ratio,
+                max_warpage=self._nominal_mesh_stats.max_warpage,
+                failing_elements={},
+            )
+        elif self._mesh_generated:
             self._mesh_stats = MeshStatistics(
                 node_count=self._nominal_mesh_stats.node_count,
                 element_count=self._nominal_mesh_stats.element_count,

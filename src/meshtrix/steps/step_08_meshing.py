@@ -125,18 +125,20 @@ class Step08Meshing(BaseStep):
 
         # 4 & 5. Verify material and thickness assignments on every body
         for body in model_bodies:
-            assigned_mat = context.driver.get_assigned_material(body.name)
-            if not assigned_mat:
+            b_name = getattr(body, "name", None) or (body.get("name") if isinstance(body, dict) else str(body))
+            b_type = getattr(body, "body_type", None) or (body.get("body_type") if isinstance(body, dict) else "solid")
+            assigned_mat = context.driver.get_assigned_material(b_name)
+            if not assigned_mat or not str(assigned_mat).strip():
                 result.add_failure(
                     FailureObject(
                         error_code=ERR_MAT_UNASSIGNED_BODY,
                         severity=Severity.BLOCKING,
                         step_id=self.step_id,
-                        component_or_entity=body.name,
-                        measured_value=None,
+                        component_or_entity=b_name,
+                        measured_value=assigned_mat,
                         expected_value="Valid assigned material",
                         engineering_message=(
-                            f"Body '{body.name}' has no material assigned prior to meshing. "
+                            f"Body '{b_name}' has no material assigned prior to meshing. "
                             f"Material assignment must precede mesh generation."
                         ),
                         likely_causes=[
@@ -144,31 +146,34 @@ class Step08Meshing(BaseStep):
                             "Body was newly added without running Step 6",
                         ],
                         suggested_fixes=[
-                            f"Execute Step 6 Material Mapping for body '{body.name}'",
-                            f"Assign a valid material to body '{body.name}' in JobSpec",
+                            f"Execute Step 6 Material Mapping for body '{b_name}'",
+                            f"Assign a valid material to body '{b_name}' in JobSpec",
                         ],
                         resume_step_id="step_06_materials",
                     )
                 )
 
-            if str(body.body_type).strip().lower() in ("surface", "shell"):
-                assigned_thk = context.driver.get_shell_thickness(body.name)
-                if (
-                    assigned_thk is None
-                    or not (assigned_thk > 0.0)
-                    or math.isnan(assigned_thk)
-                    or math.isinf(assigned_thk)
-                ):
+            if str(b_type).strip().lower() in ("surface", "shell"):
+                assigned_thk = context.driver.get_shell_thickness(b_name)
+                is_thk_valid = (
+                    assigned_thk is not None
+                    and isinstance(assigned_thk, (int, float))
+                    and not isinstance(assigned_thk, bool)
+                    and not math.isnan(assigned_thk)
+                    and not math.isinf(assigned_thk)
+                    and assigned_thk > 0.0
+                )
+                if not is_thk_valid:
                     result.add_failure(
                         FailureObject(
                             error_code=ERR_MAT_INVALID_THICKNESS,
                             severity=Severity.BLOCKING,
                             step_id=self.step_id,
-                            component_or_entity=body.name,
+                            component_or_entity=b_name,
                             measured_value=assigned_thk,
                             expected_value="> 0.0 mm",
                             engineering_message=(
-                                f"Surface body '{body.name}' requires positive finite shell thickness before meshing, "
+                                f"Surface body '{b_name}' requires positive finite shell thickness before meshing, "
                                 f"but found {assigned_thk}."
                             ),
                             likely_causes=[
@@ -176,7 +181,7 @@ class Step08Meshing(BaseStep):
                                 "Zero, negative, or infinite thickness assigned in JobSpec",
                             ],
                             suggested_fixes=[
-                                f"Assign positive shell thickness to surface body '{body.name}' in JobSpec",
+                                f"Assign positive shell thickness to surface body '{b_name}' in JobSpec",
                                 "Re-run Step 6 Material Mapping",
                             ],
                             resume_step_id="step_06_materials",
@@ -332,8 +337,10 @@ class Step08Meshing(BaseStep):
         is_elem_count_valid = (
             elem_count is not None
             and isinstance(elem_count, (int, float))
+            and not isinstance(elem_count, bool)
             and not math.isnan(elem_count)
             and not math.isinf(elem_count)
+            and elem_count >= 1
         )
 
         if not is_elem_count_valid or elem_count < min_elements:
@@ -455,17 +462,22 @@ class Step08Meshing(BaseStep):
         max_skew = context.driver.get_max_skewness()
         is_skew_valid = (
             max_skew is not None
+            and isinstance(max_skew, (int, float))
+            and not isinstance(max_skew, bool)
             and not math.isnan(max_skew)
             and not math.isinf(max_skew)
             and max_skew >= 0.0
         )
         if not is_skew_valid or max_skew > skew_thresh:
-            failing_elements = (
-                context.driver.get_failing_elements("skewness", skew_thresh)
-                if hasattr(context.driver, "get_failing_elements")
-                else []
-            )
-            elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            raw_failing: list[int] = []
+            if hasattr(context.driver, "get_failing_elements"):
+                try:
+                    failing_res = context.driver.get_failing_elements("skewness", skew_thresh)
+                    if failing_res is not None:
+                        raw_failing = list(failing_res)
+                except Exception:
+                    raw_failing = []
+            elem_desc = f"Elements {raw_failing}" if raw_failing else "Global Mesh"
             measured_repr = f"{max_skew:.4f}" if is_skew_valid else str(max_skew)
             msg = (
                 f"Maximum element skewness {measured_repr} exceeds allowable threshold "
@@ -500,17 +512,22 @@ class Step08Meshing(BaseStep):
         max_aspect = context.driver.get_max_aspect_ratio()
         is_aspect_valid = (
             max_aspect is not None
+            and isinstance(max_aspect, (int, float))
+            and not isinstance(max_aspect, bool)
             and not math.isnan(max_aspect)
             and not math.isinf(max_aspect)
             and max_aspect >= 1.0
         )
         if not is_aspect_valid or max_aspect > aspect_thresh:
-            failing_elements = (
-                context.driver.get_failing_elements("aspect_ratio", aspect_thresh)
-                if hasattr(context.driver, "get_failing_elements")
-                else []
-            )
-            elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            raw_failing = []
+            if hasattr(context.driver, "get_failing_elements"):
+                try:
+                    failing_res = context.driver.get_failing_elements("aspect_ratio", aspect_thresh)
+                    if failing_res is not None:
+                        raw_failing = list(failing_res)
+                except Exception:
+                    raw_failing = []
+            elem_desc = f"Elements {raw_failing}" if raw_failing else "Global Mesh"
             measured_repr = f"{max_aspect:.2f}" if is_aspect_valid else str(max_aspect)
             msg = (
                 f"Maximum element aspect ratio {measured_repr} exceeds allowable threshold "
@@ -545,17 +562,22 @@ class Step08Meshing(BaseStep):
         max_warp = context.driver.get_max_warpage()
         is_warp_valid = (
             max_warp is not None
+            and isinstance(max_warp, (int, float))
+            and not isinstance(max_warp, bool)
             and not math.isnan(max_warp)
             and not math.isinf(max_warp)
             and max_warp >= 0.0
         )
         if not is_warp_valid or max_warp > warp_thresh:
-            failing_elements = (
-                context.driver.get_failing_elements("warpage", warp_thresh)
-                if hasattr(context.driver, "get_failing_elements")
-                else []
-            )
-            elem_desc = f"Elements {failing_elements}" if failing_elements else "Global Mesh"
+            raw_failing = []
+            if hasattr(context.driver, "get_failing_elements"):
+                try:
+                    failing_res = context.driver.get_failing_elements("warpage", warp_thresh)
+                    if failing_res is not None:
+                        raw_failing = list(failing_res)
+                except Exception:
+                    raw_failing = []
+            elem_desc = f"Elements {raw_failing}" if raw_failing else "Global Mesh"
             measured_repr = f"{max_warp:.1f}" if is_warp_valid else str(max_warp)
             msg = (
                 f"Maximum element warpage {measured_repr} deg exceeds allowable threshold "
@@ -592,6 +614,8 @@ class Step08Meshing(BaseStep):
         self, context: RunContext, check_result: StepCheckResult
     ) -> list[FailureObject]:
         """Phase 4: Return structured FailureObjects identifying failing element sets and recommended local refinement actions."""
+        if check_result is None or not hasattr(check_result, "failures"):
+            return []
         return list(check_result.failures)
 
 

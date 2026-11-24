@@ -984,5 +984,104 @@ class TestStep08AdversarialEdgeCases:
         res = driver.get_failing_elements("jacobian", 0.5)
         assert res == [5001, 5002]
 
+    def test_post_check_string_quality_metrics_handled_without_type_error(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check detects string/corrupt quality metrics as failures without crashing with TypeError."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mock_driver.get_max_skewness = lambda: "corrupt_skew"  # type: ignore[assignment,return-value]
+        mock_driver.get_max_aspect_ratio = lambda: "bad_aspect"  # type: ignore[assignment,return-value]
+        mock_driver.get_max_warpage = lambda: "warp_err"  # type: ignore[assignment,return-value]
+
+        res = step8.post_check(context)
+        assert_check_failed(res)
+        error_codes = [f.error_code for f in res.failures]
+        assert ERR_MESH_SKEWNESS_EXCEEDED in error_codes
+        assert ERR_MESH_ASPECT_RATIO_EXCEEDED in error_codes
+        assert ERR_MESH_WARPAGE_EXCEEDED in error_codes
+
+    def test_post_check_boolean_element_count_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check detects boolean True element count as invalid and flags ERR_MESH_ELEMENT_COUNT."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mock_driver.get_element_count = lambda: True  # type: ignore[method-assign]
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_ELEMENT_COUNT)
+
+    def test_pre_check_boolean_and_string_thickness_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check rejects boolean and non-numeric shell thicknesses as invalid."""
+        mock_driver.add_body("Fuselage_Skin", body_type="surface", thickness=True)
+        mock_driver.assign_material("Fuselage_Skin", "Structural_Steel")
+
+        for body in mock_driver.get_bodies():
+            mock_driver.assign_material(body.name, "Structural_Steel")
+            if body.body_type in ("surface", "shell") and body.name != "Fuselage_Skin":
+                mock_driver.set_shell_thickness(body.name, 2.0)
+
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step = Step08Meshing()
+        res_bool = step.pre_check(context)
+        assert_check_failed(res_bool, expected_code=ERR_MAT_INVALID_THICKNESS)
+
+        # Test string thickness
+        mock_driver.get_shell_thickness = lambda name: "invalid_thk"  # type: ignore[assignment,return-value]
+        res_str = step.pre_check(context)
+        assert_check_failed(res_str, expected_code=ERR_MAT_INVALID_THICKNESS)
+
+    def test_pre_check_whitespace_material_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check rejects whitespace-only material assignment."""
+        mock_driver.add_body("Wing_Spar", body_type="solid")
+        mock_driver.assign_material("Wing_Spar", "   ")
+
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MAT_UNASSIGNED_BODY)
+        assert any(f.component_or_entity == "Wing_Spar" for f in res.failures)
+
+    def test_clear_faults_restores_mesh_generation_state(self) -> None:
+        """MockMechanicalDriver.clear_faults restores is_mesh_generated to True and resets stats."""
+        driver = MockMechanicalDriver()
+        driver.add_body("Body1", body_type="solid")
+        driver.generate_mesh(global_size=5.0)
+        assert driver.is_mesh_generated() is True
+
+        driver.inject_mesh_generation_failure(True)
+        assert driver.is_mesh_generated() is False
+
+        driver.clear_faults()
+        assert driver.is_mesh_generated() is True
+        assert driver.get_mesh_statistics().element_count > 0
+
+    def test_get_failing_elements_handles_string_cur_val_and_threshold(self) -> None:
+        """get_failing_elements safely handles string cur_val and threshold without crashing."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.generate_mesh()
+
+        driver.get_max_skewness = lambda: "corrupt"  # type: ignore[assignment,return-value]
+        res1 = driver.get_failing_elements("skewness", 0.85)
+        assert len(res1) > 0
+
+        res2 = driver.get_failing_elements("skewness", "bad_thresh")  # type: ignore[arg-type]
+        assert len(res2) > 0
+
 
 
