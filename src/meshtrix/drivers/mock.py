@@ -276,10 +276,6 @@ class MockMechanicalDriver(MechanicalDriver):
     def get_failing_elements(self, metric: str, threshold: float) -> list[int]:
         """Retrieve IDs of elements violating a quality metric threshold."""
         norm_metric = metric.lower().replace("-", "_")
-        elements = self._failing_elements.get(norm_metric, self._failing_elements.get(metric))
-        if elements is not None:
-            return list(elements)
-
         cur_val = 0.0
         if norm_metric == "skewness":
             cur_val = self.get_max_skewness()
@@ -288,9 +284,14 @@ class MockMechanicalDriver(MechanicalDriver):
         elif norm_metric == "warpage":
             cur_val = self.get_max_warpage()
 
-        if cur_val > threshold:
-            return [1001, 1002, 1003]
-        return []
+        if cur_val <= threshold:
+            return []
+
+        elements = self._failing_elements.get(norm_metric, self._failing_elements.get(metric))
+        if elements is not None:
+            return list(elements)
+
+        return [1001, 1002, 1003]
 
     # -----------------------------------------------------------------------
     # Fault Injection API for Resiliency and Recovery Verification

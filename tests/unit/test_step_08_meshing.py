@@ -696,3 +696,86 @@ class TestStep08AdversarialEdgeCases:
         assert driver.get_failing_elements("SKEWNESS", 0.85) == [1001, 1002]
         assert driver.get_failing_elements("skewness", 0.85) == [1001, 1002]
 
+    def test_get_failing_elements_respects_threshold_when_under_limit(self) -> None:
+        """Driver get_failing_elements returns empty list when metric does not exceed threshold."""
+        driver = MockMechanicalDriver()
+        driver.add_body("Body1", body_type="solid")
+        driver.generate_mesh(global_size=5.0)
+        driver.inject_mesh_skewness(0.85, [1042, 1043])
+
+        # Under threshold (0.85 <= 0.90) -> empty list
+        assert driver.get_failing_elements("skewness", threshold=0.90) == []
+        # Exceeds threshold (0.85 > 0.80) -> returns failing element list
+        assert driver.get_failing_elements("skewness", threshold=0.80) == [1042, 1043]
+
+    def test_execute_none_driver_raises_connection_error(
+        self, valid_job_spec: JobSpec
+    ) -> None:
+        """Execute aborts with ConnectionError when driver is None."""
+        context = RunContext(spec=valid_job_spec, driver=None)
+        step = Step08Meshing()
+        with pytest.raises(ConnectionError, match="not connected"):
+            step.execute(context)
+
+    def test_post_check_uppercase_quality_metric_skewness(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check handles uppercase quality_metric ('SKEWNESS') correctly."""
+        spec_dict = valid_job_spec.to_dict()
+        spec_dict["mesh"]["min_quality"] = 0.35
+        spec_dict["mesh"]["quality_metric"] = "SKEWNESS"
+        spec = JobSpec.model_validate(spec_dict)
+
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # 0.70 exceeds 1.0 - 0.35 = 0.65 -> fails with ERR_MESH_SKEWNESS_EXCEEDED
+        mock_driver.inject_mesh_skewness(0.70)
+        res = step8.post_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+    def test_pre_check_nan_thickness_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check strictly flags ERR_MAT_INVALID_THICKNESS on IEEE 754 NaN thickness."""
+        mock_driver.add_body("Fuselage_Skin", body_type="surface", thickness=float("nan"))
+        mock_driver.assign_material("Fuselage_Skin", "Structural_Steel")
+
+        for body in mock_driver.get_bodies():
+            mock_driver.assign_material(body.name, "Structural_Steel")
+            if body.body_type in ("surface", "shell") and body.name != "Fuselage_Skin":
+                mock_driver.set_shell_thickness(body.name, 2.0)
+
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MAT_INVALID_THICKNESS)
+        assert any(f.component_or_entity == "Fuselage_Skin" for f in res.failures)
+
+    def test_pre_check_driver_returns_none_named_selections_handled(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check handles driver returning None for get_named_selections without TypeError."""
+        for body in mock_driver.get_bodies():
+            mock_driver.assign_material(body.name, "Structural_Steel")
+            if body.body_type in ("surface", "shell"):
+                mock_driver.set_shell_thickness(body.name, 2.0)
+
+        mock_driver.get_named_selections = lambda: None  # type: ignore[assignment,return-value]
+
+        spec_dict = valid_job_spec.to_dict()
+        spec_dict["mesh"]["local_refinements"] = [
+            {"name": "RefineHoles", "selection": "NS_HOLES", "element_size": 1.0}
+        ]
+        spec = JobSpec.model_validate(spec_dict)
+
+        context = RunContext(spec=spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_MISSING_SELECTION)
+
+

@@ -4,6 +4,7 @@ Meshtrix Step 8: Meshing Automation and Quality Verification.
 Authoritative Reference: ORIGINAL_REQUEST.md §R1 & PROJECT.md
 """
 
+import math
 from typing import cast
 
 from meshtrix.core.step import BaseStep, RunContext
@@ -150,9 +151,9 @@ class Step08Meshing(BaseStep):
                     )
                 )
 
-            if str(body.body_type).lower() in ("surface", "shell"):
+            if str(body.body_type).strip().lower() in ("surface", "shell"):
                 assigned_thk = context.driver.get_shell_thickness(body.name)
-                if assigned_thk is None or assigned_thk <= 0.0:
+                if assigned_thk is None or not (assigned_thk > 0.0) or math.isnan(assigned_thk):
                     result.add_failure(
                         FailureObject(
                             error_code=ERR_MAT_INVALID_THICKNESS,
@@ -179,7 +180,7 @@ class Step08Meshing(BaseStep):
 
         # 6. Verify local refinement named selections exist in model
         if context.spec.mesh.local_refinements and hasattr(context.driver, "get_named_selections"):
-            existing_selections = set(context.driver.get_named_selections())
+            existing_selections = set(context.driver.get_named_selections() or [])
             for ref in context.spec.mesh.local_refinements:
                 if ref.selection not in existing_selections:
                     expected_str = (
@@ -223,7 +224,7 @@ class Step08Meshing(BaseStep):
         4. Applies all local mesh refinements from JobSpec.
         5. Triggers solver mesh generation.
         """
-        if hasattr(context.driver, "is_connected") and not context.driver.is_connected():
+        if context.driver is None or (hasattr(context.driver, "is_connected") and not context.driver.is_connected()):
             raise ConnectionError("Mechanical driver is not connected.")
 
         if context.spec.mesh is None:
@@ -381,10 +382,15 @@ class Step08Meshing(BaseStep):
         elif context.spec.tolerances and context.spec.tolerances.mesh_skewness_limit is not None:
             skew_thresh = context.spec.tolerances.mesh_skewness_limit
         elif quality_limits and quality_limits.min_quality is not None and (
-            quality_limits.metric == "skewness" or (mesh_spec and mesh_spec.quality_metric == "skewness")
+            str(quality_limits.metric).lower() == "skewness"
+            or (mesh_spec and str(mesh_spec.quality_metric).lower() == "skewness")
         ):
             skew_thresh = 1.0 - quality_limits.min_quality
-        elif mesh_spec and mesh_spec.min_quality is not None and mesh_spec.quality_metric == "skewness":
+        elif (
+            mesh_spec
+            and mesh_spec.min_quality is not None
+            and str(mesh_spec.quality_metric).lower() == "skewness"
+        ):
             skew_thresh = 1.0 - mesh_spec.min_quality
         else:
             skew_thresh = 0.85
