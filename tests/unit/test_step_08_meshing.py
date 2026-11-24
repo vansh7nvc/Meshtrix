@@ -25,7 +25,7 @@ from meshtrix.diagnostics.failure import (
 )
 from meshtrix.drivers.base import MeshStatistics
 from meshtrix.drivers.mock import MockMechanicalDriver
-from meshtrix.spec.job_spec import JobSpec
+from meshtrix.spec.job_spec import JobSpec, MeshQualityLimits
 from meshtrix.steps.step_06_materials import Step06MaterialMapping
 from meshtrix.steps.step_08_meshing import Step08Meshing, Step08MeshingAutomation
 from tests.conftest import assert_check_failed, assert_check_passed
@@ -1082,6 +1082,163 @@ class TestStep08AdversarialEdgeCases:
 
         res2 = driver.get_failing_elements("skewness", "bad_thresh")  # type: ignore[arg-type]
         assert len(res2) > 0
+
+    def test_post_check_nan_and_corrupt_quality_thresholds_fall_back_safely(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check safely resolves NaN, corrupt string, and boolean quality thresholds without silent bypass or crash."""
+        assert valid_job_spec.mesh is not None
+        if valid_job_spec.mesh.quality_limits is None:
+            valid_job_spec.mesh.quality_limits = MeshQualityLimits()
+        ql: Any = valid_job_spec.mesh.quality_limits
+
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        # 1. NaN skewness threshold should NOT cause extreme skewness to pass silently
+        ql.max_skewness = float("nan")
+        mock_driver.inject_mesh_skewness(0.95)
+        res_skew = step8.post_check(context)
+        assert_check_failed(res_skew, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+        # 2. String skewness threshold should not crash with TypeError
+        ql.max_skewness = "corrupt_thresh"
+        res_skew_str = step8.post_check(context)
+        assert_check_failed(res_skew_str, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+        # 3. NaN aspect ratio threshold should not cause extreme aspect ratio to pass
+        mock_driver.clear_faults()
+        ql.max_skewness = None
+        ql.max_aspect_ratio = float("nan")
+        mock_driver.inject_mesh_aspect_ratio(25.0)
+        res_aspect = step8.post_check(context)
+        assert_check_failed(res_aspect, expected_code=ERR_MESH_ASPECT_RATIO_EXCEEDED)
+
+        # 4. String aspect ratio threshold should not crash with TypeError
+        ql.max_aspect_ratio = "bad_aspect"
+        res_aspect_str = step8.post_check(context)
+        assert_check_failed(res_aspect_str, expected_code=ERR_MESH_ASPECT_RATIO_EXCEEDED)
+
+        # 5. NaN warpage threshold should not cause extreme warpage to pass
+        mock_driver.clear_faults()
+        ql.max_aspect_ratio = None
+        ql.max_warpage = float("nan")
+        mock_driver.inject_mesh_warpage(70.0)
+        res_warp = step8.post_check(context)
+        assert_check_failed(res_warp, expected_code=ERR_MESH_WARPAGE_EXCEEDED)
+
+        # 6. String warpage threshold should not crash with TypeError
+        ql.max_warpage = "bad_warp"
+        res_warp_str = step8.post_check(context)
+        assert_check_failed(res_warp_str, expected_code=ERR_MESH_WARPAGE_EXCEEDED)
+
+    def test_post_check_corrupt_element_count_limits_handled_without_crash(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check safely handles string and NaN element count limits in quality_limits without TypeError."""
+        assert valid_job_spec.mesh is not None
+        if valid_job_spec.mesh.quality_limits is None:
+            valid_job_spec.mesh.quality_limits = MeshQualityLimits()
+        ql: Any = valid_job_spec.mesh.quality_limits
+
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        ql.min_elements = "invalid_min"
+        ql.max_elements = "invalid_max"
+        res = step8.post_check(context)
+        assert_check_passed(res)
+
+    def test_pre_check_boolean_material_assignment_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check rejects boolean True material assignment as ERR_MAT_UNASSIGNED_BODY."""
+        mock_driver.add_body("Wing_Spar", body_type="solid")
+        mock_driver.assign_material("Wing_Spar", True)  # type: ignore[arg-type]
+
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step = Step08Meshing()
+        res = step.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MAT_UNASSIGNED_BODY)
+        assert any(f.component_or_entity == "Wing_Spar" for f in res.failures)
+
+    def test_pre_check_invalid_global_mesh_size_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check rejects non-positive, NaN, and boolean global mesh sizes."""
+        step6 = Step06MaterialMapping()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+
+        mesh_any: Any = valid_job_spec.mesh
+        step8 = Step08Meshing()
+
+        for invalid_size in [0.0, -5.0, float("nan"), float("inf"), True]:
+            mesh_any.global_size = invalid_size
+            res = step8.pre_check(context)
+            assert_check_failed(res, expected_code=ERR_MESH_SPEC_MISSING)
+
+    def test_pre_check_invalid_local_refinement_element_size_fails(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Pre-check rejects non-positive, NaN, or boolean element size in local refinement."""
+        step6 = Step06MaterialMapping()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        mock_driver.create_named_selection("NS_HOLES", ["face_1"])
+
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.local_refinements = [
+            {"name": "RefineHoles", "selection": "NS_HOLES", "element_size": float("nan")}
+        ]
+
+        step8 = Step08Meshing()
+        res = step8.pre_check(context)
+        res = step8.pre_check(context)
+        assert_check_failed(res, expected_code=ERR_MESH_SPEC_MISSING)
+        assert_check_failed(res, expected_code=ERR_MESH_SPEC_MISSING)
+
+    def test_execute_none_step_data_does_not_crash(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Execute completes cleanly even when context.step_data is None."""
+        step6 = Step06MaterialMapping()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+
+        context.step_data = None  # type: ignore[assignment]
+        step8 = Step08Meshing()
+        step8.execute(context)
+        assert mock_driver.is_mesh_generated() is True
+
+    def test_mock_driver_get_failing_elements_none_metric(self) -> None:
+        """MockMechanicalDriver.get_failing_elements handles None metric without AttributeError."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.generate_mesh()
+        res = driver.get_failing_elements(None, 0.85)  # type: ignore[arg-type]
+        assert len(res) > 0
+
+    def test_mock_driver_generate_mesh_string_injected_element_count(self) -> None:
+        """MockMechanicalDriver.generate_mesh safely handles string injected element count."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.inject_mesh_element_count("corrupt_count")
+        stats = driver.generate_mesh()
+        assert stats.element_count == 0
+        assert stats.node_count == 0
+        assert isinstance(stats.node_count, int)
 
 
 

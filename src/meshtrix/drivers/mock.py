@@ -209,11 +209,19 @@ class MockMechanicalDriver(MechanicalDriver):
         size = max(0.001, self._global_mesh_size or 5.0)
         base_elem_count = int(max(100, 1000 * body_count / size))
         refinement_elem_count = len(self._local_refinements) * 250
-        total_elements = (
-            self._injected_element_count
-            if self._injected_element_count is not None
-            else (base_elem_count + refinement_elem_count)
-        )
+        if (
+            self._injected_element_count is not None
+            and isinstance(self._injected_element_count, (int, float))
+            and not isinstance(self._injected_element_count, bool)
+            and not math.isnan(self._injected_element_count)
+            and not math.isinf(self._injected_element_count)
+        ):
+            total_elements = int(self._injected_element_count)
+        elif self._injected_element_count is not None:
+            total_elements = 0
+        else:
+            total_elements = base_elem_count + refinement_elem_count
+
         mult = 8 if self._element_order in ("quadratic", "2", "second") else 4
         total_nodes = total_elements * mult
 
@@ -276,7 +284,7 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def get_failing_elements(self, metric: str, threshold: float) -> list[int]:
         """Retrieve IDs of elements violating a quality metric threshold."""
-        norm_metric = metric.lower().replace("-", "_").strip()
+        norm_metric = "" if metric is None else str(metric).lower().replace("-", "_").strip()
         cur_val: float | None = None
         if norm_metric == "skewness":
             cur_val = self.get_max_skewness()
