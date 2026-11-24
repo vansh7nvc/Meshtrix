@@ -278,7 +278,7 @@ class MockMechanicalDriver(MechanicalDriver):
             total_elements = base_elem_count + refinement_elem_count
 
         mult = 8 if self._element_order in ("quadratic", "2", "second") else 4
-        total_nodes = total_elements * mult
+        total_nodes = max(0, total_elements * mult)
 
         skew = self._injected_max_skewness if self._injected_max_skewness is not None else 0.28
         aspect = self._injected_max_aspect_ratio if self._injected_max_aspect_ratio is not None else 1.85

@@ -1386,6 +1386,92 @@ class TestStep08AdversarialEdgeCases:
         assert refinements[0]["name"] == "refinement"
         assert refinements[0]["element_size"] == pytest.approx(2.0)
 
+    def test_post_check_quality_limits_as_dictionary_handled(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check extracts thresholds cleanly when quality_limits is a dict without AttributeError."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.quality_limits = {
+            "max_skewness": 0.88,
+            "max_aspect_ratio": 7.5,
+            "max_warpage": 35.0,
+            "min_elements": 50,
+            "max_elements": 5000,
+        }
+
+        # Skewness 0.86 < 0.88 -> passes
+        mock_driver.inject_mesh_skewness(0.86)
+        res_pass = step8.post_check(context)
+        assert_check_passed(res_pass)
+
+        # Skewness 0.90 > 0.88 -> fails
+        mock_driver.inject_mesh_skewness(0.90)
+        res_fail = step8.post_check(context)
+        assert_check_failed(res_fail, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+    def test_post_check_tolerances_as_dictionary_handled(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Post-check extracts quality limits when spec.tolerances is a dictionary."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+        step8.execute(context)
+
+        spec_any: Any = valid_job_spec
+        spec_any.tolerances = {"mesh_skewness_limit": 0.82}
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.quality_limits = None
+        mesh_any.max_skewness = None
+        mesh_any.min_quality = None
+
+        # Skewness 0.80 < 0.82 -> passes
+        mock_driver.inject_mesh_skewness(0.80)
+        res_pass = step8.post_check(context)
+        assert_check_passed(res_pass)
+
+        # Skewness 0.85 > 0.82 -> fails
+        mock_driver.inject_mesh_skewness(0.85)
+        res_fail = step8.post_check(context)
+        assert_check_failed(res_fail, expected_code=ERR_MESH_SKEWNESS_EXCEEDED)
+
+    def test_execute_unnamed_and_unselected_refinement_dict_no_duplication(
+        self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
+    ) -> None:
+        """Execute and generate_mesh harmonize name for refinement dict without name and without selection."""
+        step6 = Step06MaterialMapping()
+        step8 = Step08Meshing()
+        context = RunContext(spec=valid_job_spec, driver=mock_driver)
+        step6.pre_check(context)
+        step6.execute(context)
+
+        mesh_any: Any = valid_job_spec.mesh
+        mesh_any.local_refinements = [{"element_size": 2.0}]
+
+        step8.execute(context)
+        refinements = mock_driver.get_local_refinements()
+        assert len(refinements) == 1
+        assert refinements[0]["name"] == "refinement"
+        assert refinements[0]["element_size"] == pytest.approx(2.0)
+
+    def test_mock_driver_generate_mesh_negative_element_count_clamped_nodes(self) -> None:
+        """MockMechanicalDriver.generate_mesh clamps node count to non-negative when negative elements injected."""
+        driver = MockMechanicalDriver()
+        driver.add_body("B1", body_type="solid")
+        driver.inject_mesh_element_count(-25)
+        stats = driver.generate_mesh()
+        assert stats.element_count == -25
+        assert stats.node_count == 0
+
 
 
 

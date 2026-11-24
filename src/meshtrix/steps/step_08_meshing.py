@@ -44,9 +44,18 @@ def _resolve_numeric_threshold(
     return None
 
 
+def _get_field(obj: Any, field: str, default: Any = None) -> Any:
+    """Safely extract field from object, dict, or Pydantic model."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(field, default)
+    return getattr(obj, field, default)
+
+
 def _resolve_body_name(body: Any) -> str:
     """Safely extract body name as non-empty string."""
-    raw_name = body.get("name") if isinstance(body, dict) else getattr(body, "name", None)
+    raw_name = _get_field(body, "name")
     if raw_name is not None and str(raw_name).strip():
         return str(raw_name).strip()
     return str(body) if body is not None else "UnknownBody"
@@ -54,7 +63,7 @@ def _resolve_body_name(body: Any) -> str:
 
 def _resolve_body_type(body: Any) -> str:
     """Safely extract body type (solid/surface/shell)."""
-    raw_type = body.get("body_type") if isinstance(body, dict) else getattr(body, "body_type", None)
+    raw_type = _get_field(body, "body_type")
     if raw_type is not None and str(raw_type).strip():
         return str(raw_type).strip().lower()
     return "solid"
@@ -62,18 +71,18 @@ def _resolve_body_type(body: Any) -> str:
 
 def _resolve_refinement_name(ref: Any) -> str:
     """Safely extract local refinement name as non-empty string."""
-    raw_name = ref.get("name") if isinstance(ref, dict) else getattr(ref, "name", None)
+    raw_name = _get_field(ref, "name")
     if raw_name is not None and str(raw_name).strip():
         return str(raw_name).strip()
-    raw_sel = ref.get("selection") if isinstance(ref, dict) else getattr(ref, "selection", None)
+    raw_sel = _get_field(ref, "selection")
     if raw_sel is not None and str(raw_sel).strip():
         return f"refinement_{str(raw_sel).strip()}"
-    return str(ref) if ref is not None else "refinement"
+    return "refinement"
 
 
 def _resolve_selection_name(ref: Any) -> str:
     """Safely extract named selection identifier."""
-    raw_sel = ref.get("selection") if isinstance(ref, dict) else getattr(ref, "selection", None)
+    raw_sel = _get_field(ref, "selection")
     if raw_sel is not None:
         return str(raw_sel).strip()
     return ""
@@ -441,15 +450,15 @@ class Step08Meshing(BaseStep):
             return result
 
         mesh_spec = context.spec.mesh
-        quality_limits = mesh_spec.quality_limits if mesh_spec else None
+        quality_limits = _get_field(mesh_spec, "quality_limits")
 
         # 3. Element count validation
         elem_count = context.driver.get_element_count()
-        raw_min_elem = quality_limits.min_elements if quality_limits else None
+        raw_min_elem = _get_field(quality_limits, "min_elements")
         min_elem_resolved = _resolve_numeric_threshold(raw_min_elem, min_val=1.0)
         min_elements = int(min_elem_resolved) if min_elem_resolved is not None else 1
 
-        raw_max_elem = quality_limits.max_elements if quality_limits else None
+        raw_max_elem = _get_field(quality_limits, "max_elements")
         max_elem_resolved = _resolve_numeric_threshold(raw_max_elem, min_val=1.0)
         max_elements = int(max_elem_resolved) if max_elem_resolved is not None else None
 
@@ -518,30 +527,37 @@ class Step08Meshing(BaseStep):
         #           mesh.min_quality (if skewness metric) ->
         #           quality_limits.min_quality (default for skewness) ->
         #           default 0.85
-        ql_max_skew = _resolve_numeric_threshold(quality_limits.max_skewness, 0.0, 1.0) if quality_limits else None
-        mesh_max_skew = _resolve_numeric_threshold(mesh_spec.max_skewness, 0.0, 1.0) if mesh_spec else None
+        ql_max_skew = _resolve_numeric_threshold(_get_field(quality_limits, "max_skewness"), 0.0, 1.0)
+        mesh_max_skew = _resolve_numeric_threshold(_get_field(mesh_spec, "max_skewness"), 0.0, 1.0)
         tol_max_skew = (
-            _resolve_numeric_threshold(context.spec.tolerances.mesh_skewness_limit, 0.0, 1.0)
+            _resolve_numeric_threshold(_get_field(context.spec.tolerances, "mesh_skewness_limit"), 0.0, 1.0)
             if context.spec.tolerances
             else None
         )
 
-        ql_raw_min_q = _resolve_numeric_threshold(quality_limits.min_quality, 0.0, 1.0) if quality_limits else None
-        mesh_raw_min_q = _resolve_numeric_threshold(mesh_spec.min_quality, 0.0, 1.0) if mesh_spec else None
+        ql_raw_min_q = _resolve_numeric_threshold(_get_field(quality_limits, "min_quality"), 0.0, 1.0)
+        mesh_raw_min_q = _resolve_numeric_threshold(_get_field(mesh_spec, "min_quality"), 0.0, 1.0)
+
+        ql_metric = _get_field(quality_limits, "metric")
+        mesh_metric = _get_field(mesh_spec, "quality_metric")
 
         ql_explicit_min_qual = (
             quality_limits is not None
             and ql_raw_min_q is not None
-            and (not hasattr(quality_limits, "model_fields_set") or "min_quality" in quality_limits.model_fields_set)
             and (
-                str(quality_limits.metric).strip().lower() == "skewness"
-                or (quality_limits.metric is None and mesh_spec and str(mesh_spec.quality_metric).strip().lower() == "skewness")
+                ("min_quality" in quality_limits)
+                if isinstance(quality_limits, dict)
+                else (not hasattr(quality_limits, "model_fields_set") or "min_quality" in quality_limits.model_fields_set)
+            )
+            and (
+                str(ql_metric).strip().lower() == "skewness"
+                or (ql_metric is None and mesh_spec and str(mesh_metric).strip().lower() == "skewness")
             )
         )
         mesh_has_min_qual = (
             mesh_spec is not None
             and mesh_raw_min_q is not None
-            and str(mesh_spec.quality_metric).strip().lower() == "skewness"
+            and str(mesh_metric).strip().lower() == "skewness"
         )
 
         if ql_max_skew is not None:
@@ -558,8 +574,8 @@ class Step08Meshing(BaseStep):
             quality_limits
             and ql_raw_min_q is not None
             and (
-                str(quality_limits.metric).strip().lower() == "skewness"
-                or (quality_limits.metric is None and mesh_spec and str(mesh_spec.quality_metric).strip().lower() == "skewness")
+                str(ql_metric).strip().lower() == "skewness"
+                or (ql_metric is None and mesh_spec and str(mesh_metric).strip().lower() == "skewness")
             )
         ):
             skew_thresh = 1.0 - ql_raw_min_q
@@ -568,10 +584,10 @@ class Step08Meshing(BaseStep):
 
         # Aspect ratio threshold resolution:
         # Priority: quality_limits.max_aspect_ratio -> mesh.max_aspect_ratio -> tolerances.mesh_aspect_ratio_limit -> default 10.0
-        ql_max_aspect = _resolve_numeric_threshold(quality_limits.max_aspect_ratio, 1.0) if quality_limits else None
-        mesh_max_aspect = _resolve_numeric_threshold(mesh_spec.max_aspect_ratio, 1.0) if mesh_spec else None
+        ql_max_aspect = _resolve_numeric_threshold(_get_field(quality_limits, "max_aspect_ratio"), 1.0)
+        mesh_max_aspect = _resolve_numeric_threshold(_get_field(mesh_spec, "max_aspect_ratio"), 1.0)
         tol_max_aspect = (
-            _resolve_numeric_threshold(context.spec.tolerances.mesh_aspect_ratio_limit, 1.0)
+            _resolve_numeric_threshold(_get_field(context.spec.tolerances, "mesh_aspect_ratio_limit"), 1.0)
             if context.spec.tolerances
             else None
         )
@@ -587,10 +603,10 @@ class Step08Meshing(BaseStep):
 
         # Warpage threshold resolution:
         # Priority: quality_limits.max_warpage -> mesh.max_warpage -> tolerances.mesh_warpage_limit -> default 45.0 degrees
-        ql_max_warp = _resolve_numeric_threshold(quality_limits.max_warpage, 0.0) if quality_limits else None
-        mesh_max_warp = _resolve_numeric_threshold(mesh_spec.max_warpage, 0.0) if mesh_spec else None
+        ql_max_warp = _resolve_numeric_threshold(_get_field(quality_limits, "max_warpage"), 0.0)
+        mesh_max_warp = _resolve_numeric_threshold(_get_field(mesh_spec, "max_warpage"), 0.0)
         tol_max_warp = (
-            _resolve_numeric_threshold(context.spec.tolerances.mesh_warpage_limit, 0.0)
+            _resolve_numeric_threshold(_get_field(context.spec.tolerances, "mesh_warpage_limit"), 0.0)
             if context.spec.tolerances
             else None
         )
