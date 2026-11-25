@@ -708,9 +708,7 @@ class TestStep08AdversarialEdgeCases:
         # Exceeds threshold (0.85 > 0.80) -> returns failing element list
         assert driver.get_failing_elements("skewness", threshold=0.80) == [1042, 1043]
 
-    def test_execute_none_driver_raises_connection_error(
-        self, valid_job_spec: JobSpec
-    ) -> None:
+    def test_execute_none_driver_raises_connection_error(self, valid_job_spec: JobSpec) -> None:
         """Execute aborts with ConnectionError when driver is None."""
         context = RunContext(spec=valid_job_spec, driver=None)
         step = Step08Meshing()
@@ -1331,7 +1329,9 @@ class TestStep08AdversarialEdgeCases:
         res = step8.pre_check(context)
         assert not res.passed
         assert any(f.error_code == ERR_MESH_MISSING_SELECTION for f in res.failures)
-        assert all(isinstance(f.component_or_entity, str) and f.component_or_entity for f in res.failures)
+        assert all(
+            isinstance(f.component_or_entity, str) and f.component_or_entity for f in res.failures
+        )
 
     def test_pre_check_unnamed_body_dict_does_not_crash_validation(
         self, valid_job_spec: JobSpec
@@ -1347,7 +1347,9 @@ class TestStep08AdversarialEdgeCases:
         res = step8.pre_check(context)
         assert not res.passed
         assert any(f.error_code == ERR_MAT_UNASSIGNED_BODY for f in res.failures)
-        assert all(isinstance(f.component_or_entity, str) and f.component_or_entity for f in res.failures)
+        assert all(
+            isinstance(f.component_or_entity, str) and f.component_or_entity for f in res.failures
+        )
 
     def test_execute_unnamed_refinement_dict_does_not_duplicate_refinements(
         self, valid_job_spec: JobSpec, mock_driver: MockMechanicalDriver
@@ -1471,8 +1473,3 @@ class TestStep08AdversarialEdgeCases:
         stats = driver.generate_mesh()
         assert stats.element_count == -25
         assert stats.node_count == 0
-
-
-
-
-

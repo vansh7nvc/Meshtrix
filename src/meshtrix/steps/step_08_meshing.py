@@ -116,7 +116,9 @@ class Step08Meshing(BaseStep):
         result = StepCheckResult(step_id=self.step_id)
 
         # 1. Driver connection verification
-        if context.driver is None or (hasattr(context.driver, "is_connected") and not context.driver.is_connected()):
+        if context.driver is None or (
+            hasattr(context.driver, "is_connected") and not context.driver.is_connected()
+        ):
             result.add_failure(
                 FailureObject(
                     error_code=ERR_DRIVER_COMMUNICATION,
@@ -281,10 +283,14 @@ class Step08Meshing(BaseStep):
                 if hasattr(context.driver, "get_named_selections")
                 else set()
             )
-            for ref in (context.spec.mesh.local_refinements or []):
+            for ref in context.spec.mesh.local_refinements or []:
                 ref_name = _resolve_refinement_name(ref)
                 ref_selection = _resolve_selection_name(ref)
-                ref_size = getattr(ref, "element_size", None) if hasattr(ref, "element_size") else (ref.get("element_size") if isinstance(ref, dict) else None)
+                ref_size = (
+                    getattr(ref, "element_size", None)
+                    if hasattr(ref, "element_size")
+                    else (ref.get("element_size") if isinstance(ref, dict) else None)
+                )
 
                 if ref_selection not in existing_selections:
                     expected_str = (
@@ -351,7 +357,9 @@ class Step08Meshing(BaseStep):
         4. Applies all local mesh refinements from JobSpec.
         5. Triggers solver mesh generation.
         """
-        if context.driver is None or (hasattr(context.driver, "is_connected") and not context.driver.is_connected()):
+        if context.driver is None or (
+            hasattr(context.driver, "is_connected") and not context.driver.is_connected()
+        ):
             raise ConnectionError("Mechanical driver is not connected.")
 
         if context.spec.mesh is None:
@@ -366,10 +374,14 @@ class Step08Meshing(BaseStep):
         context.driver.set_element_order(str(mesh_spec.element_order))
 
         # 3. Apply local mesh refinements
-        for ref in (mesh_spec.local_refinements or []):
+        for ref in mesh_spec.local_refinements or []:
             ref_name = _resolve_refinement_name(ref)
             ref_selection = _resolve_selection_name(ref)
-            raw_size = getattr(ref, "element_size", None) if hasattr(ref, "element_size") else (ref.get("element_size") if isinstance(ref, dict) else None)
+            raw_size = (
+                getattr(ref, "element_size", None)
+                if hasattr(ref, "element_size")
+                else (ref.get("element_size") if isinstance(ref, dict) else None)
+            )
             res_size = _resolve_numeric_threshold(raw_size, min_val=1e-6)
             ref_size = res_size if res_size is not None else 0.0
             context.driver.add_local_refinement(
@@ -403,7 +415,9 @@ class Step08Meshing(BaseStep):
         result = StepCheckResult(step_id=self.step_id)
 
         # 1. Driver connection verification
-        if context.driver is None or (hasattr(context.driver, "is_connected") and not context.driver.is_connected()):
+        if context.driver is None or (
+            hasattr(context.driver, "is_connected") and not context.driver.is_connected()
+        ):
             result.add_failure(
                 FailureObject(
                     error_code=ERR_DRIVER_COMMUNICATION,
@@ -527,15 +541,21 @@ class Step08Meshing(BaseStep):
         #           mesh.min_quality (if skewness metric) ->
         #           quality_limits.min_quality (default for skewness) ->
         #           default 0.85
-        ql_max_skew = _resolve_numeric_threshold(_get_field(quality_limits, "max_skewness"), 0.0, 1.0)
+        ql_max_skew = _resolve_numeric_threshold(
+            _get_field(quality_limits, "max_skewness"), 0.0, 1.0
+        )
         mesh_max_skew = _resolve_numeric_threshold(_get_field(mesh_spec, "max_skewness"), 0.0, 1.0)
         tol_max_skew = (
-            _resolve_numeric_threshold(_get_field(context.spec.tolerances, "mesh_skewness_limit"), 0.0, 1.0)
+            _resolve_numeric_threshold(
+                _get_field(context.spec.tolerances, "mesh_skewness_limit"), 0.0, 1.0
+            )
             if context.spec.tolerances
             else None
         )
 
-        ql_raw_min_q = _resolve_numeric_threshold(_get_field(quality_limits, "min_quality"), 0.0, 1.0)
+        ql_raw_min_q = _resolve_numeric_threshold(
+            _get_field(quality_limits, "min_quality"), 0.0, 1.0
+        )
         mesh_raw_min_q = _resolve_numeric_threshold(_get_field(mesh_spec, "min_quality"), 0.0, 1.0)
 
         ql_metric = _get_field(quality_limits, "metric")
@@ -547,11 +567,18 @@ class Step08Meshing(BaseStep):
             and (
                 ("min_quality" in quality_limits)
                 if isinstance(quality_limits, dict)
-                else (not hasattr(quality_limits, "model_fields_set") or "min_quality" in quality_limits.model_fields_set)
+                else (
+                    not hasattr(quality_limits, "model_fields_set")
+                    or "min_quality" in quality_limits.model_fields_set
+                )
             )
             and (
                 str(ql_metric).strip().lower() == "skewness"
-                or (ql_metric is None and mesh_spec and str(mesh_metric).strip().lower() == "skewness")
+                or (
+                    ql_metric is None
+                    and mesh_spec
+                    and str(mesh_metric).strip().lower() == "skewness"
+                )
             )
         )
         mesh_has_min_qual = (
@@ -575,7 +602,11 @@ class Step08Meshing(BaseStep):
             and ql_raw_min_q is not None
             and (
                 str(ql_metric).strip().lower() == "skewness"
-                or (ql_metric is None and mesh_spec and str(mesh_metric).strip().lower() == "skewness")
+                or (
+                    ql_metric is None
+                    and mesh_spec
+                    and str(mesh_metric).strip().lower() == "skewness"
+                )
             )
         ):
             skew_thresh = 1.0 - ql_raw_min_q
@@ -584,10 +615,14 @@ class Step08Meshing(BaseStep):
 
         # Aspect ratio threshold resolution:
         # Priority: quality_limits.max_aspect_ratio -> mesh.max_aspect_ratio -> tolerances.mesh_aspect_ratio_limit -> default 10.0
-        ql_max_aspect = _resolve_numeric_threshold(_get_field(quality_limits, "max_aspect_ratio"), 1.0)
+        ql_max_aspect = _resolve_numeric_threshold(
+            _get_field(quality_limits, "max_aspect_ratio"), 1.0
+        )
         mesh_max_aspect = _resolve_numeric_threshold(_get_field(mesh_spec, "max_aspect_ratio"), 1.0)
         tol_max_aspect = (
-            _resolve_numeric_threshold(_get_field(context.spec.tolerances, "mesh_aspect_ratio_limit"), 1.0)
+            _resolve_numeric_threshold(
+                _get_field(context.spec.tolerances, "mesh_aspect_ratio_limit"), 1.0
+            )
             if context.spec.tolerances
             else None
         )
@@ -606,7 +641,9 @@ class Step08Meshing(BaseStep):
         ql_max_warp = _resolve_numeric_threshold(_get_field(quality_limits, "max_warpage"), 0.0)
         mesh_max_warp = _resolve_numeric_threshold(_get_field(mesh_spec, "max_warpage"), 0.0)
         tol_max_warp = (
-            _resolve_numeric_threshold(_get_field(context.spec.tolerances, "mesh_warpage_limit"), 0.0)
+            _resolve_numeric_threshold(
+                _get_field(context.spec.tolerances, "mesh_warpage_limit"), 0.0
+            )
             if context.spec.tolerances
             else None
         )
@@ -776,7 +813,11 @@ class Step08Meshing(BaseStep):
         self, context: RunContext, check_result: StepCheckResult
     ) -> list[FailureObject]:
         """Phase 4: Return structured FailureObjects identifying failing element sets and recommended local refinement actions."""
-        if check_result is None or not hasattr(check_result, "failures") or check_result.failures is None:
+        if (
+            check_result is None
+            or not hasattr(check_result, "failures")
+            or check_result.failures is None
+        ):
             return []
         return [f for f in check_result.failures if isinstance(f, FailureObject)]
 

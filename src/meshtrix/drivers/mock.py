@@ -281,7 +281,9 @@ class MockMechanicalDriver(MechanicalDriver):
         total_nodes = max(0, total_elements * mult)
 
         skew = self._injected_max_skewness if self._injected_max_skewness is not None else 0.28
-        aspect = self._injected_max_aspect_ratio if self._injected_max_aspect_ratio is not None else 1.85
+        aspect = (
+            self._injected_max_aspect_ratio if self._injected_max_aspect_ratio is not None else 1.85
+        )
         warpage = self._injected_max_warpage if self._injected_max_warpage is not None else 3.5
         if (
             isinstance(skew, (int, float))
