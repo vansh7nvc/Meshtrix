@@ -183,6 +183,11 @@ class MeshQualityLimits(BaseModel):
 
     min_quality: float = Field(default=0.2, ge=0.0, le=1.0)
     metric: str = "skewness"
+    max_skewness: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_aspect_ratio: float | None = Field(default=None, gt=0.0)
+    max_warpage: float | None = Field(default=None, ge=0.0)
+    min_elements: int | None = Field(default=None, ge=1)
+    max_elements: int | None = Field(default=None, ge=1)
 
 
 class MeshSettings(BaseModel):
@@ -192,6 +197,9 @@ class MeshSettings(BaseModel):
     element_order: ElementOrder | str = "quadratic"
     min_quality: float = Field(default=0.2, ge=0.0, le=1.0)
     quality_metric: str = "skewness"
+    max_skewness: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_aspect_ratio: float | None = Field(default=None, gt=0.0)
+    max_warpage: float | None = Field(default=None, ge=0.0)
     local_refinements: list[LocalMeshRefinement] = Field(default_factory=list)
     quality_limits: MeshQualityLimits | None = None
 
@@ -201,6 +209,9 @@ class CheckTolerances(BaseModel):
 
     thickness_tolerance: float = Field(default=0.01, gt=0.0)
     mass_tolerance: float = Field(default=0.05, gt=0.0)
+    mesh_skewness_limit: float | None = Field(default=None, ge=0.0, le=1.0)
+    mesh_aspect_ratio_limit: float | None = Field(default=None, gt=0.0)
+    mesh_warpage_limit: float | None = Field(default=None, ge=0.0)
 
 
 class MassTarget(BaseModel):
