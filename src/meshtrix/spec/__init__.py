@@ -1,6 +1,7 @@
 """JobSpec schema definitions and sub-models."""
 
 from meshtrix.spec.job_spec import (
+    AccelerationSpec,
     AnalysisType,
     BodyMaterialMapping,
     BodyType,
@@ -23,6 +24,7 @@ from meshtrix.spec.job_spec import (
 )
 
 __all__ = [
+    "AccelerationSpec",
     "AnalysisType",
     "BodyMaterialMapping",
     "BodyType",

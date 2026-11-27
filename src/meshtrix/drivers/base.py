@@ -5,7 +5,7 @@ Authoritative Reference: ORIGINAL_REQUEST.md §R2 & PROJECT.md
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -43,6 +43,56 @@ class MeshStatistics:
     max_aspect_ratio: float = 1.0
     max_warpage: float = 0.0
     failing_elements: dict[str, list[int]] | None = None
+
+
+@dataclass
+class SupportRecord:
+    """Recorded boundary condition support applied in the solver model."""
+
+    name: str
+    selection: str
+    support_type: str = "fixed"
+    dofs: list[str] = field(default_factory=list)
+    coordinate_system: str = "Global"
+    displacement_values: dict[str, float] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize support record into JSON-safe primitives."""
+        return {
+            "name": self.name,
+            "selection": self.selection,
+            "support_type": self.support_type,
+            "dofs": list(self.dofs),
+            "coordinate_system": self.coordinate_system,
+            "displacement_values": (
+                dict(self.displacement_values) if self.displacement_values is not None else None
+            ),
+        }
+
+
+@dataclass
+class LoadRecord:
+    """Recorded load (force, pressure, or acceleration) applied in the solver model."""
+
+    case_id: str
+    load_type: str
+    selection: str | None
+    magnitude: float
+    direction: list[float] = field(default_factory=lambda: [0.0, 0.0, 1.0])
+    coordinate_system: str = "Global"
+    name: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize load record into JSON-safe primitives."""
+        return {
+            "case_id": self.case_id,
+            "load_type": self.load_type,
+            "selection": self.selection,
+            "magnitude": float(self.magnitude),
+            "direction": [float(v) for v in self.direction],
+            "coordinate_system": self.coordinate_system,
+            "name": self.name,
+        }
 
 
 class MechanicalDriver(ABC):
@@ -160,6 +210,70 @@ class MechanicalDriver(ABC):
     @abstractmethod
     def get_named_selections(self) -> list[str]:
         """List all named selection identifiers."""
+
+    @abstractmethod
+    def has_named_selection(self, name: str) -> bool:
+        """Return True if a named selection with the given name exists."""
+
+    @abstractmethod
+    def get_named_selection_entities(self, name: str) -> list[str]:
+        """Retrieve entity identifiers belonging to a named selection."""
+
+    @abstractmethod
+    def apply_support(
+        self,
+        selection: str,
+        support_type: str = "fixed",
+        dofs: list[str] | None = None,
+        coordinate_system: str = "Global",
+        name: str | None = None,
+        displacement_values: dict[str, float] | None = None,
+    ) -> SupportRecord:
+        """Apply a boundary condition support to a named selection."""
+
+    @abstractmethod
+    def get_supports(self) -> list[SupportRecord]:
+        """Retrieve all boundary condition supports currently applied."""
+
+    @abstractmethod
+    def apply_force(
+        self,
+        case_id: str,
+        selection: str,
+        magnitude: float,
+        direction: list[float],
+        coordinate_system: str = "Global",
+        name: str | None = None,
+    ) -> LoadRecord:
+        """Apply a force load to a named selection within a load case."""
+
+    @abstractmethod
+    def apply_pressure(
+        self,
+        case_id: str,
+        selection: str,
+        magnitude: float,
+        direction: list[float] | None = None,
+        coordinate_system: str = "Global",
+        name: str | None = None,
+    ) -> LoadRecord:
+        """Apply a pressure load to a named selection within a load case."""
+
+    @abstractmethod
+    def apply_acceleration(
+        self,
+        case_id: str,
+        magnitude: float,
+        direction: list[float],
+        selection: str | None = None,
+        coordinate_system: str = "Global",
+        name: str | None = None,
+    ) -> LoadRecord:
+        """Apply an inertial acceleration load within a load case."""
+
+    @abstractmethod
+    def get_loads(self, case_id: str | None = None) -> list[LoadRecord]:
+        """Retrieve applied loads, optionally filtered by load case identifier."""
 
     @abstractmethod
     def clear_faults(self) -> None:

@@ -4,10 +4,20 @@ Meshtrix In-Memory Mock Driver for Zero-License Offline Execution.
 Authoritative Reference: ORIGINAL_REQUEST.md §R2 & PROJECT.md
 """
 
+import copy
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from meshtrix.drivers.base import BodyProperties, MechanicalDriver, MeshStatistics
+from meshtrix.drivers.base import (
+    BodyProperties,
+    LoadRecord,
+    MechanicalDriver,
+    MeshStatistics,
+    SupportRecord,
+)
+
+if TYPE_CHECKING:
+    from meshtrix.spec.job_spec import JobSpec
 
 
 class MockMechanicalDriver(MechanicalDriver):
@@ -22,6 +32,13 @@ class MockMechanicalDriver(MechanicalDriver):
         self._nominal_assigned_materials: dict[str, str] = {}
         self._nominal_shell_thicknesses: dict[str, float | None] = {}
         self._named_selections: dict[str, list[str]] = {}
+        self._nominal_named_selections: dict[str, list[str]] = {}
+        self._supports: list[SupportRecord] = []
+        self._nominal_supports: list[SupportRecord] = []
+        self._loads: list[LoadRecord] = []
+        self._nominal_loads: list[LoadRecord] = []
+        self._support_counter: int = 0
+        self._load_counter: int = 0
 
         # Mesh generation and quality inspection state
         self._mesh_generated: bool = False
@@ -141,11 +158,239 @@ class MockMechanicalDriver(MechanicalDriver):
 
     def create_named_selection(self, name: str, entities: list[str]) -> None:
         """Create a named selection."""
-        self._named_selections[name] = entities
+        copied = [str(e) for e in entities]
+        self._named_selections[name] = copied
+        self._nominal_named_selections[name] = list(copied)
 
     def get_named_selections(self) -> list[str]:
         """List all named selection identifiers."""
         return list(self._named_selections.keys())
+
+    def has_named_selection(self, name: str) -> bool:
+        """Return True if a named selection with the given name exists."""
+        return name in self._named_selections
+
+    def get_named_selection_entities(self, name: str) -> list[str]:
+        """Retrieve entity identifiers belonging to a named selection."""
+        return list(self._named_selections.get(name, []))
+
+    # -----------------------------------------------------------------------
+    # Boundary Conditions and Applied Loads API
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_enum_str(value: Any, default: str = "") -> str:
+        if value is None:
+            return default
+        if hasattr(value, "value"):
+            return str(value.value).strip()
+        return str(value).strip()
+
+    @staticmethod
+    def _resolve_default_dofs(
+        support_type: str,
+        displacement_values: dict[str, float] | None,
+    ) -> list[str]:
+        norm = support_type.strip().lower()
+        if norm == "fixed":
+            return ["UX", "UY", "UZ", "RX", "RY", "RZ"]
+        if norm == "pinned":
+            return ["UX", "UY", "UZ"]
+        if norm == "frictionless":
+            return ["NORMAL"]
+        if norm == "displacement":
+            if displacement_values:
+                return [str(k).strip().upper() for k in displacement_values]
+            return ["UX", "UY", "UZ"]
+        return []
+
+    @staticmethod
+    def _clone_support(record: SupportRecord) -> SupportRecord:
+        return SupportRecord(
+            name=record.name,
+            selection=record.selection,
+            support_type=record.support_type,
+            dofs=list(record.dofs),
+            coordinate_system=record.coordinate_system,
+            displacement_values=(
+                dict(record.displacement_values) if record.displacement_values is not None else None
+            ),
+        )
+
+    @staticmethod
+    def _clone_load(record: LoadRecord) -> LoadRecord:
+        return LoadRecord(
+            case_id=record.case_id,
+            load_type=record.load_type,
+            selection=record.selection,
+            magnitude=float(record.magnitude),
+            direction=[float(v) for v in record.direction],
+            coordinate_system=record.coordinate_system,
+            name=record.name,
+        )
+
+    def apply_support(
+        self,
+        selection: str,
+        support_type: str = "fixed",
+        dofs: list[str] | None = None,
+        coordinate_system: str = "Global",
+        name: str | None = None,
+        displacement_values: dict[str, float] | None = None,
+    ) -> SupportRecord:
+        """Apply a boundary condition support to a named selection."""
+        s_type = self._normalize_enum_str(support_type, "fixed").lower()
+        disp_vals = (
+            {str(k).strip().upper(): float(v) for k, v in displacement_values.items()}
+            if displacement_values is not None
+            else None
+        )
+        resolved_dofs = (
+            list(dict.fromkeys(str(d).strip().upper() for d in dofs))
+            if dofs is not None
+            else self._resolve_default_dofs(s_type, disp_vals)
+        )
+
+        has_explicit_name = name is not None and bool(str(name).strip())
+        if has_explicit_name:
+            resolved_name = str(name).strip()
+        else:
+            self._support_counter += 1
+            resolved_name = f"Support_{self._support_counter}_{selection}"
+
+        record = SupportRecord(
+            name=resolved_name,
+            selection=selection,
+            support_type=s_type,
+            dofs=resolved_dofs,
+            coordinate_system=coordinate_system,
+            displacement_values=disp_vals,
+        )
+
+        updated = False
+        if has_explicit_name:
+            for idx, existing in enumerate(self._supports):
+                if existing.name == resolved_name:
+                    self._supports[idx] = record
+                    updated = True
+                    break
+        if not updated:
+            self._supports.append(record)
+
+        self._nominal_supports = [self._clone_support(s) for s in self._supports]
+        return self._clone_support(record)
+
+    def get_supports(self) -> list[SupportRecord]:
+        """Retrieve all boundary condition supports currently applied."""
+        return [self._clone_support(s) for s in self._supports]
+
+    def _apply_load_record(
+        self,
+        *,
+        case_id: str,
+        load_type: str,
+        selection: str | None,
+        magnitude: float,
+        direction: list[float] | None,
+        coordinate_system: str,
+        name: str | None,
+    ) -> LoadRecord:
+        dir_vec = [float(v) for v in direction] if direction is not None else [0.0, 0.0, 1.0]
+        clean_name = str(name).strip() if name is not None and str(name).strip() else None
+        self._load_counter += 1
+
+        record = LoadRecord(
+            case_id=case_id,
+            load_type=load_type,
+            selection=selection,
+            magnitude=float(magnitude),
+            direction=dir_vec,
+            coordinate_system=coordinate_system,
+            name=clean_name,
+        )
+
+        updated = False
+        if clean_name is not None:
+            for idx, existing in enumerate(self._loads):
+                if (
+                    existing.case_id == case_id
+                    and existing.name == clean_name
+                    and existing.load_type == load_type
+                ):
+                    self._loads[idx] = record
+                    updated = True
+                    break
+        if not updated:
+            self._loads.append(record)
+
+        self._nominal_loads = [self._clone_load(ld) for ld in self._loads]
+        return self._clone_load(record)
+
+    def apply_force(
+        self,
+        case_id: str,
+        selection: str,
+        magnitude: float,
+        direction: list[float],
+        coordinate_system: str = "Global",
+        name: str | None = None,
+    ) -> LoadRecord:
+        """Apply a force load to a named selection within a load case."""
+        return self._apply_load_record(
+            case_id=case_id,
+            load_type="force",
+            selection=selection,
+            magnitude=magnitude,
+            direction=direction,
+            coordinate_system=coordinate_system,
+            name=name,
+        )
+
+    def apply_pressure(
+        self,
+        case_id: str,
+        selection: str,
+        magnitude: float,
+        direction: list[float] | None = None,
+        coordinate_system: str = "Global",
+        name: str | None = None,
+    ) -> LoadRecord:
+        """Apply a pressure load to a named selection within a load case."""
+        return self._apply_load_record(
+            case_id=case_id,
+            load_type="pressure",
+            selection=selection,
+            magnitude=magnitude,
+            direction=direction,
+            coordinate_system=coordinate_system,
+            name=name,
+        )
+
+    def apply_acceleration(
+        self,
+        case_id: str,
+        magnitude: float,
+        direction: list[float],
+        selection: str | None = None,
+        coordinate_system: str = "Global",
+        name: str | None = None,
+    ) -> LoadRecord:
+        """Apply an inertial acceleration load within a load case."""
+        return self._apply_load_record(
+            case_id=case_id,
+            load_type="acceleration",
+            selection=selection,
+            magnitude=magnitude,
+            direction=direction,
+            coordinate_system=coordinate_system,
+            name=name,
+        )
+
+    def get_loads(self, case_id: str | None = None) -> list[LoadRecord]:
+        """Retrieve applied loads, optionally filtered by load case identifier."""
+        if case_id is None:
+            return [self._clone_load(ld) for ld in self._loads]
+        return [self._clone_load(ld) for ld in self._loads if ld.case_id == case_id]
 
     # -----------------------------------------------------------------------
     # Meshing Execution and Quality Query API
@@ -488,6 +733,85 @@ class MockMechanicalDriver(MechanicalDriver):
         if fail:
             self._mesh_generated = False
 
+    def inject_empty_named_selection(self, name: str) -> None:
+        """Inject an empty named selection in live model state."""
+        self._named_selections[name] = []
+
+    def inject_missing_named_selection(self, name: str) -> None:
+        """Remove a named selection from live model state."""
+        self._named_selections.pop(name, None)
+
+    @staticmethod
+    def _matches_support(record: SupportRecord, target: str) -> bool:
+        return record.name == target or record.selection == target
+
+    def inject_support_scoping_error(self, target: str, wrong_selection: str) -> None:
+        """Inject a scoping mismatch on matching live supports."""
+        for rec in self._supports:
+            if self._matches_support(rec, target):
+                rec.selection = wrong_selection
+
+    def inject_support_dof_error(self, target: str, wrong_dofs: list[str]) -> None:
+        """Inject a DOF mismatch on matching live supports."""
+        norm_dofs = [str(d).strip().upper() for d in wrong_dofs]
+        for rec in self._supports:
+            if self._matches_support(rec, target):
+                rec.dofs = list(norm_dofs)
+
+    def inject_support_coordinate_system_error(self, target: str, wrong_cs: str) -> None:
+        """Inject a coordinate system mismatch on matching live supports."""
+        for rec in self._supports:
+            if self._matches_support(rec, target):
+                rec.coordinate_system = wrong_cs
+
+    def inject_missing_support(self, target: str) -> None:
+        """Remove matching supports from live model state."""
+        self._supports = [r for r in self._supports if not self._matches_support(r, target)]
+
+    @staticmethod
+    def _matches_load(record: LoadRecord, target: str, case_id: str | None) -> bool:
+        if case_id is not None and record.case_id != case_id:
+            return False
+        return target in (record.name, record.selection, record.case_id, record.load_type)
+
+    def inject_load_magnitude_error(
+        self, target: str, wrong_magnitude: float, case_id: str | None = None
+    ) -> None:
+        """Inject an erroneous load magnitude on matching live loads."""
+        for rec in self._loads:
+            if self._matches_load(rec, target, case_id):
+                rec.magnitude = float(wrong_magnitude)
+
+    def inject_load_sign_error(self, target: str, case_id: str | None = None) -> None:
+        """Invert the sign of matching live loads."""
+        for rec in self._loads:
+            if self._matches_load(rec, target, case_id):
+                if rec.magnitude != 0.0:
+                    rec.magnitude = -rec.magnitude
+                else:
+                    rec.direction = [-v for v in rec.direction]
+
+    def inject_load_direction_error(
+        self, target: str, wrong_direction: list[float], case_id: str | None = None
+    ) -> None:
+        """Inject an erroneous direction vector on matching live loads."""
+        dir_vec = [float(v) for v in wrong_direction]
+        for rec in self._loads:
+            if self._matches_load(rec, target, case_id):
+                rec.direction = list(dir_vec)
+
+    def inject_load_coordinate_system_error(
+        self, target: str, wrong_cs: str, case_id: str | None = None
+    ) -> None:
+        """Inject a coordinate system mismatch on matching live loads."""
+        for rec in self._loads:
+            if self._matches_load(rec, target, case_id):
+                rec.coordinate_system = wrong_cs
+
+    def inject_missing_load(self, target: str, case_id: str | None = None) -> None:
+        """Remove matching loads from live model state."""
+        self._loads = [r for r in self._loads if not self._matches_load(r, target, case_id)]
+
     def clear_faults(self) -> None:
         """Restore nominal state and clear injected errors."""
         self._assigned_materials = dict(self._nominal_assigned_materials)
@@ -495,6 +819,10 @@ class MockMechanicalDriver(MechanicalDriver):
         for name, body in self._bodies.items():
             body.material_name = self._assigned_materials.get(name)
             body.thickness = self._shell_thicknesses.get(name)
+
+        self._named_selections = {k: list(v) for k, v in self._nominal_named_selections.items()}
+        self._supports = [self._clone_support(s) for s in self._nominal_supports]
+        self._loads = [self._clone_load(ld) for ld in self._nominal_loads]
 
         # Clear mesh fault injections
         self._injected_element_count = None
@@ -525,3 +853,320 @@ class MockMechanicalDriver(MechanicalDriver):
                 max_warpage=self._nominal_mesh_stats.max_warpage,
                 failing_elements={},
             )
+
+    # -----------------------------------------------------------------------
+    # State Serialization and Spec Seeding
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _mesh_stats_to_dict(stats: MeshStatistics) -> dict[str, Any]:
+        return {
+            "node_count": int(stats.node_count),
+            "element_count": int(stats.element_count),
+            "min_quality": float(stats.min_quality),
+            "max_skewness": float(stats.max_skewness),
+            "max_aspect_ratio": float(stats.max_aspect_ratio),
+            "max_warpage": float(stats.max_warpage),
+            "failing_elements": (
+                {str(k): [int(e) for e in v] for k, v in stats.failing_elements.items()}
+                if stats.failing_elements is not None
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _mesh_stats_from_dict(data: dict[str, Any]) -> MeshStatistics:
+        raw_fe = data.get("failing_elements")
+        failing_elements = (
+            {str(k): [int(e) for e in v] for k, v in raw_fe.items()}
+            if isinstance(raw_fe, dict)
+            else None
+        )
+        return MeshStatistics(
+            node_count=int(data.get("node_count", 0)),
+            element_count=int(data.get("element_count", 0)),
+            min_quality=float(data.get("min_quality", 1.0)),
+            max_skewness=float(data.get("max_skewness", 0.0)),
+            max_aspect_ratio=float(data.get("max_aspect_ratio", 1.0)),
+            max_warpage=float(data.get("max_warpage", 0.0)),
+            failing_elements=failing_elements,
+        )
+
+    @staticmethod
+    def _support_from_dict(data: dict[str, Any]) -> SupportRecord:
+        raw_disp = data.get("displacement_values")
+        disp_vals = (
+            {str(k).strip().upper(): float(v) for k, v in raw_disp.items()}
+            if isinstance(raw_disp, dict)
+            else None
+        )
+        return SupportRecord(
+            name=str(data.get("name", "")),
+            selection=str(data.get("selection", "")),
+            support_type=str(data.get("support_type", "fixed")),
+            dofs=[str(d).strip().upper() for d in data.get("dofs", [])],
+            coordinate_system=str(data.get("coordinate_system", "Global")),
+            displacement_values=disp_vals,
+        )
+
+    @staticmethod
+    def _load_from_dict(data: dict[str, Any]) -> LoadRecord:
+        raw_sel = data.get("selection")
+        raw_name = data.get("name")
+        return LoadRecord(
+            case_id=str(data.get("case_id", "")),
+            load_type=str(data.get("load_type", "force")),
+            selection=str(raw_sel) if raw_sel is not None else None,
+            magnitude=float(data.get("magnitude", 0.0)),
+            direction=[float(v) for v in data.get("direction", [0.0, 0.0, 1.0])],
+            coordinate_system=str(data.get("coordinate_system", "Global")),
+            name=str(raw_name) if raw_name is not None else None,
+        )
+
+    @staticmethod
+    def _serialize_material(props: Any) -> Any:
+        if hasattr(props, "model_dump"):
+            return props.model_dump(mode="json")
+        return copy.deepcopy(props)
+
+    def export_state(self) -> dict[str, Any]:
+        """Export complete mock driver state as a JSON-serializable dictionary."""
+        return {
+            "connected": self._connected,
+            "bodies": {
+                name: {
+                    "name": body.name,
+                    "body_type": body.body_type,
+                    "material_name": body.material_name,
+                    "thickness": body.thickness,
+                    "offset_type": body.offset_type,
+                }
+                for name, body in self._bodies.items()
+            },
+            "materials": {k: self._serialize_material(v) for k, v in self._materials.items()},
+            "assigned_materials": dict(self._assigned_materials),
+            "nominal_assigned_materials": dict(self._nominal_assigned_materials),
+            "shell_thicknesses": dict(self._shell_thicknesses),
+            "nominal_shell_thicknesses": dict(self._nominal_shell_thicknesses),
+            "named_selections": {k: list(v) for k, v in self._named_selections.items()},
+            "nominal_named_selections": {
+                k: list(v) for k, v in self._nominal_named_selections.items()
+            },
+            "mesh_generated": self._mesh_generated,
+            "global_mesh_size": self._global_mesh_size,
+            "element_order": self._element_order,
+            "local_refinements": copy.deepcopy(self._local_refinements),
+            "mesh_stats": self._mesh_stats_to_dict(self._mesh_stats),
+            "nominal_mesh_stats": self._mesh_stats_to_dict(self._nominal_mesh_stats),
+            "failing_elements": {k: list(v) for k, v in self._failing_elements.items()},
+            "inject_mesh_generation_failure_flag": self._inject_mesh_generation_failure_flag,
+            "injected_element_count": self._injected_element_count,
+            "injected_max_skewness": self._injected_max_skewness,
+            "injected_max_aspect_ratio": self._injected_max_aspect_ratio,
+            "injected_max_warpage": self._injected_max_warpage,
+            "supports": [s.to_dict() for s in self._supports],
+            "nominal_supports": [s.to_dict() for s in self._nominal_supports],
+            "loads": [ld.to_dict() for ld in self._loads],
+            "nominal_loads": [ld.to_dict() for ld in self._nominal_loads],
+            "support_counter": self._support_counter,
+            "load_counter": self._load_counter,
+        }
+
+    def import_state(self, state: dict[str, Any]) -> None:
+        """Restore mock driver state from an exported or partial JSON dictionary."""
+        self._connected = bool(state.get("connected", True))
+
+        bodies: dict[str, BodyProperties] = {}
+        raw_bodies = state.get("bodies", {})
+        if isinstance(raw_bodies, dict):
+            for key, b_data in raw_bodies.items():
+                if isinstance(b_data, dict):
+                    b_name = str(b_data.get("name", key))
+                    bodies[b_name] = BodyProperties(
+                        name=b_name,
+                        body_type=str(b_data.get("body_type", "solid")),
+                        material_name=(
+                            str(b_data["material_name"])
+                            if b_data.get("material_name") is not None
+                            else None
+                        ),
+                        thickness=(
+                            float(b_data["thickness"])
+                            if b_data.get("thickness") is not None
+                            else None
+                        ),
+                        offset_type=str(b_data.get("offset_type", "middle")),
+                    )
+        elif isinstance(raw_bodies, list):
+            for b_data in raw_bodies:
+                if isinstance(b_data, dict) and "name" in b_data:
+                    b_name = str(b_data["name"])
+                    bodies[b_name] = BodyProperties(
+                        name=b_name,
+                        body_type=str(b_data.get("body_type", "solid")),
+                        material_name=(
+                            str(b_data["material_name"])
+                            if b_data.get("material_name") is not None
+                            else None
+                        ),
+                        thickness=(
+                            float(b_data["thickness"])
+                            if b_data.get("thickness") is not None
+                            else None
+                        ),
+                        offset_type=str(b_data.get("offset_type", "middle")),
+                    )
+        self._bodies = bodies
+
+        raw_materials = state.get("materials", {})
+        self._materials = copy.deepcopy(raw_materials) if isinstance(raw_materials, dict) else {}
+
+        if "assigned_materials" in state:
+            self._assigned_materials = {
+                str(k): str(v) for k, v in state["assigned_materials"].items()
+            }
+        else:
+            self._assigned_materials = {
+                name: b.material_name
+                for name, b in self._bodies.items()
+                if b.material_name is not None
+            }
+
+        if "nominal_assigned_materials" in state:
+            self._nominal_assigned_materials = {
+                str(k): str(v) for k, v in state["nominal_assigned_materials"].items()
+            }
+        else:
+            self._nominal_assigned_materials = dict(self._assigned_materials)
+
+        if "shell_thicknesses" in state:
+            self._shell_thicknesses = {
+                str(k): (float(v) if v is not None else None)
+                for k, v in state["shell_thicknesses"].items()
+            }
+        else:
+            self._shell_thicknesses = {name: b.thickness for name, b in self._bodies.items()}
+
+        if "nominal_shell_thicknesses" in state:
+            self._nominal_shell_thicknesses = {
+                str(k): (float(v) if v is not None else None)
+                for k, v in state["nominal_shell_thicknesses"].items()
+            }
+        else:
+            self._nominal_shell_thicknesses = dict(self._shell_thicknesses)
+
+        raw_ns = state.get("named_selections", {})
+        self._named_selections = (
+            {str(k): [str(e) for e in v] for k, v in raw_ns.items()}
+            if isinstance(raw_ns, dict)
+            else {}
+        )
+        if "nominal_named_selections" in state:
+            raw_nom_ns = state["nominal_named_selections"]
+            self._nominal_named_selections = (
+                {str(k): [str(e) for e in v] for k, v in raw_nom_ns.items()}
+                if isinstance(raw_nom_ns, dict)
+                else {}
+            )
+        else:
+            self._nominal_named_selections = {k: list(v) for k, v in self._named_selections.items()}
+
+        self._mesh_generated = bool(state.get("mesh_generated", False))
+        raw_gms = state.get("global_mesh_size")
+        self._global_mesh_size = float(raw_gms) if raw_gms is not None else None
+        self._element_order = str(state.get("element_order", "quadratic"))
+        raw_refs = state.get("local_refinements", [])
+        self._local_refinements = copy.deepcopy(raw_refs) if isinstance(raw_refs, list) else []
+
+        raw_stats = state.get("mesh_stats")
+        self._mesh_stats = (
+            self._mesh_stats_from_dict(raw_stats)
+            if isinstance(raw_stats, dict)
+            else MeshStatistics()
+        )
+        raw_nom_stats = state.get("nominal_mesh_stats")
+        self._nominal_mesh_stats = (
+            self._mesh_stats_from_dict(raw_nom_stats)
+            if isinstance(raw_nom_stats, dict)
+            else self._mesh_stats_from_dict(self._mesh_stats_to_dict(self._mesh_stats))
+        )
+
+        raw_fe = state.get("failing_elements", {})
+        self._failing_elements = (
+            {str(k): [int(e) for e in v] for k, v in raw_fe.items()}
+            if isinstance(raw_fe, dict)
+            else {}
+        )
+        self._inject_mesh_generation_failure_flag = bool(
+            state.get("inject_mesh_generation_failure_flag", False)
+        )
+        self._injected_element_count = state.get("injected_element_count")
+        self._injected_max_skewness = state.get("injected_max_skewness")
+        self._injected_max_aspect_ratio = state.get("injected_max_aspect_ratio")
+        self._injected_max_warpage = state.get("injected_max_warpage")
+
+        raw_supports = state.get("supports", [])
+        self._supports = (
+            [self._support_from_dict(s) for s in raw_supports if isinstance(s, dict)]
+            if isinstance(raw_supports, list)
+            else []
+        )
+        if "nominal_supports" in state:
+            raw_nom_supports = state["nominal_supports"]
+            self._nominal_supports = (
+                [self._support_from_dict(s) for s in raw_nom_supports if isinstance(s, dict)]
+                if isinstance(raw_nom_supports, list)
+                else []
+            )
+        else:
+            self._nominal_supports = [self._clone_support(s) for s in self._supports]
+
+        raw_loads = state.get("loads", [])
+        self._loads = (
+            [self._load_from_dict(ld) for ld in raw_loads if isinstance(ld, dict)]
+            if isinstance(raw_loads, list)
+            else []
+        )
+        if "nominal_loads" in state:
+            raw_nom_loads = state["nominal_loads"]
+            self._nominal_loads = (
+                [self._load_from_dict(ld) for ld in raw_nom_loads if isinstance(ld, dict)]
+                if isinstance(raw_nom_loads, list)
+                else []
+            )
+        else:
+            self._nominal_loads = [self._clone_load(ld) for ld in self._loads]
+
+        self._support_counter = int(state.get("support_counter", len(self._supports)))
+        self._load_counter = int(state.get("load_counter", len(self._loads)))
+
+    def seed_from_spec(self, spec: "JobSpec") -> None:
+        """Idempotently populate CAD bodies and named selections referenced by a JobSpec."""
+        for body_name, mapping in spec.materials.mappings.items():
+            if not self.has_body(body_name):
+                if mapping.body_type is not None:
+                    bt = self._normalize_enum_str(mapping.body_type, "solid").lower()
+                elif mapping.thickness is not None:
+                    bt = "surface"
+                else:
+                    bt = "solid"
+                self.add_body(name=body_name, body_type=bt, thickness=None)
+
+        selections: list[str] = []
+        if spec.mesh is not None:
+            for ref in spec.mesh.local_refinements:
+                selections.append(ref.selection)
+        for sup in spec.supports:
+            selections.append(sup.selection)
+        for lc in spec.load_cases:
+            for force in lc.forces:
+                selections.append(force.selection)
+            for pressure in lc.pressures:
+                selections.append(pressure.selection)
+            for accel in lc.accelerations:
+                if accel.selection is not None:
+                    selections.append(accel.selection)
+
+        for sel_name in dict.fromkeys(selections):
+            if sel_name and sel_name.strip() and not self.has_named_selection(sel_name):
+                self.create_named_selection(sel_name, [f"{sel_name}_entity_1"])
