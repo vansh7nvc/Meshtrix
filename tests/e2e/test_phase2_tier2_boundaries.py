@@ -167,9 +167,8 @@ class TestPhase2Tier2Step09Boundaries:
 
     def test_step09_missing_named_selection_fails_pre_check(self, tier2_spec: JobSpec) -> None:
         """T2-A1: Missing named selection fails Step09 pre_check with ERR_BC_MISSING_SELECTION."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import ERR_BC_MISSING_SELECTION
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         step = Step09BoundaryConditions()
 
@@ -191,9 +190,8 @@ class TestPhase2Tier2Step09Boundaries:
 
     def test_step09_empty_named_selection_fails_pre_check(self, tier2_spec: JobSpec) -> None:
         """T2-A2: Empty named selection fails Step09 pre_check with ERR_BC_EMPTY_SELECTION."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import ERR_BC_EMPTY_SELECTION
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         step = Step09BoundaryConditions()
 
@@ -213,9 +211,8 @@ class TestPhase2Tier2Step09Boundaries:
 
     def test_step09_support_scoping_mismatch_fails_post_check(self, tier2_spec: JobSpec) -> None:
         """T2-A3: Injected support scoping mismatch fails post_check with ERR_BC_SCOPING_MISMATCH."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import ERR_BC_SCOPING_MISMATCH
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         driver = _build_driver_with_selections(
             {"NS_BASE_FACES": ["Face_1"], "NS_WRONG_FACE": ["Face_99"]}
@@ -238,9 +235,8 @@ class TestPhase2Tier2Step09Boundaries:
 
     def test_step09_support_dof_mismatch_fails_post_check(self, tier2_spec: JobSpec) -> None:
         """T2-A4: Injected DOF mismatch on fixed support fails with ERR_BC_DOF_MISMATCH."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import ERR_BC_DOF_MISMATCH
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         driver = _build_driver_with_selections({"NS_BASE_FACES": ["Face_1"]})
         context = RunContext(spec=tier2_spec, driver=driver)
@@ -258,12 +254,11 @@ class TestPhase2Tier2Step09Boundaries:
         self, tier2_spec: JobSpec
     ) -> None:
         """T2-A5: CS mismatch and missing support faults produce exact ERR_BC_* codes."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import (
             ERR_BC_COORDINATE_SYSTEM_MISMATCH,
             ERR_BC_MISSING_SUPPORT,
         )
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         step = Step09BoundaryConditions()
 
@@ -291,9 +286,8 @@ class TestPhase2Tier2Step09Boundaries:
         self, tier2_spec_dict: dict[str, Any]
     ) -> None:
         """T2-A6: MODAL free-free (supports=[]) passes, whereas STRUCTURAL_STATIC rejects it."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import ERR_BC_INVALID_SPEC
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         step = Step09BoundaryConditions()
 
@@ -322,9 +316,8 @@ class TestPhase2Tier2Step09Boundaries:
 
     def test_step09_nan_inf_displacement_and_disconnected_driver(self, tier2_spec: JobSpec) -> None:
         """T2-A7: NaN/Inf displacement_values and disconnected driver are rejected cleanly."""
-        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-
         from meshtrix.diagnostics.failure import ERR_BC_INVALID_SPEC
+        from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
 
         for bad_val in (float("nan"), float("inf"), float("-inf")):
             with pytest.raises(ValidationError):
@@ -376,12 +369,11 @@ class TestPhase2Tier2Step10Boundaries:
         self, tier2_spec_dict: dict[str, Any]
     ) -> None:
         """T2-B1: Missing or empty named selections fail Step10 pre_check with ERR_LOAD_*."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import (
             ERR_LOAD_EMPTY_SELECTION,
             ERR_LOAD_MISSING_SELECTION,
         )
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         step = Step10Loads()
         spec = JobSpec.model_validate(tier2_spec_dict)
@@ -402,10 +394,9 @@ class TestPhase2Tier2Step10Boundaries:
         self, tier2_spec: JobSpec
     ) -> None:
         """T2-B2: Zero direction vector and wrong vector arity are rejected at schema & pre_check."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import ERR_LOAD_INVALID_SPEC
         from meshtrix.spec.job_spec import AccelerationSpec
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         for bad_dir in ([0.0, 0.0, 0.0], [1.0, 0.0], [1.0, 0.0, 0.0, 0.0]):
             with pytest.raises(ValidationError):
@@ -432,10 +423,9 @@ class TestPhase2Tier2Step10Boundaries:
 
     def test_step10_nan_and_inf_in_load_magnitude_or_direction(self, tier2_spec: JobSpec) -> None:
         """T2-B3: NaN/Inf in load magnitude or direction rejected cleanly without exceptions."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import ERR_LOAD_INVALID_SPEC
         from meshtrix.spec.job_spec import AccelerationSpec
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         for bad_float in (float("nan"), float("inf"), float("-inf")):
             with pytest.raises(ValidationError):
@@ -476,9 +466,8 @@ class TestPhase2Tier2Step10Boundaries:
         self, tier2_spec_dict: dict[str, Any]
     ) -> None:
         """T2-B4: Canceling load pairs, negative suction pressure, and zero loads avoid ZeroDivisionError."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import ERR_LOAD_INVALID_SPEC
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         step = Step10Loads()
 
@@ -555,12 +544,11 @@ class TestPhase2Tier2Step10Boundaries:
 
     def test_step10_sign_inversion_and_direction_mismatch_faults(self, tier2_spec: JobSpec) -> None:
         """T2-B5: Sign inversion triggers ERR_LOAD_SIGN_MISMATCH; tilted direction triggers ERR_LOAD_DIRECTION_MISMATCH."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import (
             ERR_LOAD_DIRECTION_MISMATCH,
             ERR_LOAD_SIGN_MISMATCH,
         )
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         step = Step10Loads()
 
@@ -591,12 +579,11 @@ class TestPhase2Tier2Step10Boundaries:
 
     def test_step10_load_and_direction_tolerance_boundaries(self, tier2_spec: JobSpec) -> None:
         """T2-B6: Magnitude and direction deviations pass within CheckTolerances and fail beyond."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import (
             ERR_LOAD_DIRECTION_MISMATCH,
             ERR_LOAD_TOTAL_MISMATCH,
         )
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         step = Step10Loads()
 
@@ -648,12 +635,11 @@ class TestPhase2Tier2Step10Boundaries:
         self, tier2_spec: JobSpec
     ) -> None:
         """T2-B7: Load CS mismatch, missing load, and disconnected driver yield exact errors."""
-        from meshtrix.steps.step_10_loads import Step10Loads
-
         from meshtrix.diagnostics.failure import (
             ERR_LOAD_COORDINATE_SYSTEM_MISMATCH,
             ERR_LOAD_MISSING_LOAD,
         )
+        from meshtrix.steps.step_10_loads import Step10Loads
 
         step = Step10Loads()
 

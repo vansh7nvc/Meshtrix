@@ -445,9 +445,8 @@ def test_scenario_cylindrical_pressure_vessel_pinned_and_frictionless(tmp_path: 
 
 def test_scenario_cantilevered_wing_spar_static_vs_free_free_modal(tmp_path: Path) -> None:
     """T4-3: Cantilevered wing spar passes static + free-free modal; empty static BCs fail."""
-    from meshtrix.runner import PipelineRunner
-
     from meshtrix.diagnostics.failure import ERR_BC_INVALID_SPEC
+    from meshtrix.runner import PipelineRunner
 
     base_spec_dict: dict[str, Any] = {
         "job_id": "JOB-T4-WING-SPAR-STATIC",
@@ -572,9 +571,8 @@ def test_scenario_multi_load_case_bracket_fault_injection_and_resume_recovery(
 ) -> None:
     """T4-4: 3-LC bracket fails at Step 10 (sign + magnitude), clears, resumes at Step 10."""
     from meshtrix.core.checkpoint import CheckpointManager
-    from meshtrix.runner import PipelineRunner
-
     from meshtrix.diagnostics.failure import ERR_LOAD_SIGN_MISMATCH, ERR_LOAD_TOTAL_MISMATCH
+    from meshtrix.runner import PipelineRunner
 
     spec = JobSpec.from_dict(_aerospace_bracket_multi_lc_dict())
     driver = _LoadFaultDriver()
@@ -693,7 +691,6 @@ def test_scenario_cli_faulty_mock_state_troubleshoot_and_resume(tmp_path: Path) 
     """T4-6: SpaceClaim export defect in --mock-state fails Step 9, remedies, and resumes."""
     from meshtrix.cli.main import app
     from meshtrix.core.checkpoint import CheckpointManager
-
     from meshtrix.diagnostics.failure import ERR_BC_EMPTY_SELECTION
 
     spec_dict = _aerospace_bracket_multi_lc_dict()

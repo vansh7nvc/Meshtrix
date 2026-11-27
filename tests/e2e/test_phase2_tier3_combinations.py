@@ -241,9 +241,8 @@ class _PortFaultDriver(MockMechanicalDriver):
 def test_full_pipeline_6_8_9_10_fault_injection_clear_and_resume(tmp_path: Path) -> None:
     """T3-1: Full 6->8->9->10 pipeline fails on Step 9 fault, clears, and resumes at Step 9."""
     from meshtrix.core.checkpoint import CheckpointManager
-    from meshtrix.runner import PipelineRunner
-
     from meshtrix.diagnostics.failure import ERR_BC_EMPTY_SELECTION
+    from meshtrix.runner import PipelineRunner
 
     spec = JobSpec.from_dict(_build_lug_bracket_spec_dict())
     driver = _create_seeded_driver(spec)
@@ -454,9 +453,8 @@ def test_multi_support_and_multi_load_case_combinations(tmp_path: Path) -> None:
 
 def test_mixed_forces_pressures_accelerations_custom_tolerances(tmp_path: Path) -> None:
     """T3-4: Tight custom CheckTolerances catches 5e-4 error that default 0.01 would permit."""
-    from meshtrix.runner import PipelineRunner
-
     from meshtrix.diagnostics.failure import ERR_LOAD_TOTAL_MISMATCH
+    from meshtrix.runner import PipelineRunner
 
     # Nominal pass under tight custom tolerances
     tight_dict = _build_lug_bracket_spec_dict(
@@ -511,9 +509,6 @@ def test_mixed_forces_pressures_accelerations_custom_tolerances(tmp_path: Path) 
 
 def test_step09_and_step10_concurrent_diagnostic_aggregation() -> None:
     """T3-5: Step 9 and Step 10 aggregate multiple concurrent faults and preserve them in troubleshoot."""
-    from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
-    from meshtrix.steps.step_10_loads import Step10Loads
-
     from meshtrix.diagnostics.failure import (
         ERR_BC_COORDINATE_SYSTEM_MISMATCH,
         ERR_BC_DOF_MISMATCH,
@@ -523,6 +518,8 @@ def test_step09_and_step10_concurrent_diagnostic_aggregation() -> None:
         ERR_LOAD_SIGN_MISMATCH,
         ERR_LOAD_TOTAL_MISMATCH,
     )
+    from meshtrix.steps.step_09_boundary_conditions import Step09BoundaryConditions
+    from meshtrix.steps.step_10_loads import Step10Loads
 
     # Part A: Step 9 pre_check aggregates missing + empty named selections
     spec_dict = _build_lug_bracket_spec_dict(job_id="JOB-T3-CONCURRENT-DIAG")
@@ -655,9 +652,8 @@ def test_driver_export_import_state_roundtrip_across_pipeline_resume(tmp_path: P
 def test_step10_fault_after_step09_checkpoint_resumes_at_step10_only(tmp_path: Path) -> None:
     """T3-7: Steps 6, 8, 9 checkpoint cleanly; Step 10 sign fault clears and resumes Step 10 only."""
     from meshtrix.core.checkpoint import CheckpointManager
-    from meshtrix.runner import PipelineRunner
-
     from meshtrix.diagnostics.failure import ERR_LOAD_SIGN_MISMATCH
+    from meshtrix.runner import PipelineRunner
 
     spec = JobSpec.from_dict(_build_lug_bracket_spec_dict(job_id="JOB-T3-RESUME-STEP10"))
     driver = _PortFaultDriver()

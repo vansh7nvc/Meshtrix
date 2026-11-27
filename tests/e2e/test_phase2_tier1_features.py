@@ -849,9 +849,8 @@ class TestPhase2Tier1RunnerCheckpointing:
         self, tmp_path: Path, tier1_spec: JobSpec
     ) -> None:
         """T1-C6: PipelineRunner stops immediately on Step 9 failure without running Step 10."""
-        from meshtrix.runner import PipelineRunner
-
         from meshtrix.diagnostics.failure import ERR_BC_EMPTY_SELECTION
+        from meshtrix.runner import PipelineRunner
 
         driver = _build_seeded_driver(
             {
