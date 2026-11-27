@@ -63,6 +63,9 @@ plugins = [
 module = "ansys.*"
 ignore_missing_imports = true
 
+[project.scripts]
+meshtrix = "meshtrix.cli.main:app"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
